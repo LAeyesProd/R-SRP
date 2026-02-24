@@ -1,0 +1,29 @@
+# R-SRP API Service - Zero-Trust API Gateway
+
+[package]
+name = "api-service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+crue-engine = { path = "../../crates/crue-engine" }
+immutable-logging = { path = "../../crates/immutable-logging" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+axum = "0.7"
+tower = { version = "0.4", features = ["util", "limit"] }
+tower-http = { version = "0.5", features = ["trace", "cors", "security"] }
+tokio = { version = "1.35", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.7", features = ["v4", "serde"] }
+jsonwebtoken = "9.2"
+thiserror = "1.0"
+anyhow = "1.0"
+
+[dev-dependencies]
+reqwest = { version = "0.11", features = ["json"] }
+tokio-test = "0.4"

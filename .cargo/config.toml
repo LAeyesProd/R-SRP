@@ -1,0 +1,47 @@
+# Cargo Configuration for R-SRP Ultra
+# Security-focused build configuration
+
+[build]
+# Enable parallel compilation
+jobs = 4
+
+[target.x86_64-unknown-linux-gnu]
+# Linker arguments for security hardening
+# RELRO (Full), NOW (Bind Now) - prevents GOT overwrite attacks
+# PIE is enabled by default on modern GCC/Clang
+# noexecstack - prevents stack execution
+rustflags = [
+  "-C", "relocation-model=pie",
+  "-C", "link-arg=-Wl,-z,relro,-z,now",
+  "-C", "link-arg=-Wl,-z,noexecstack",
+  "-C", "link-arg=-Wl,-z,now",
+  "-C", "link-arg=-Wl,-z,nosuid",
+  "-C", "link-arg=-Wl,-z,nochange_page_attr"
+]
+
+[target.x86_64-pc-windows-gnu]
+# Windows-specific security settings
+
+[target.aarch64-unknown-linux-gnu]
+# ARM64 security settings
+rustflags = [
+  "-C", "relocation-model=pie",
+  "-C", "link-arg=-Wl,-z,relro,-z,now",
+  "-C", "link-arg=-Wl,-z,noexecstack"
+]
+
+# Reproducible builds configuration
+# Ensures bit-identical builds across environments
+[env]
+SOURCE_DATE_EPOCH = { value = "{{ SOURCE_DATE_EPOCH }}", force = true }
+CARGO_NET_GIT_FETCH_WITH_CLI = { value = "false", force = true }
+
+# Build options for reproducible builds
+[build]
+# Prevent network access during build
+frozen = true
+locked = true
+
+# Default target for all Rust targets
+[term]
+verbose = false

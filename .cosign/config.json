@@ -1,0 +1,67 @@
+{
+  "cosign": {
+    "keyless": {
+      "enabled": true,
+      "identityToken": "https://oauth2.sigstore.dev/auth/authenticate",
+      "issuer": "https://token.actions.githubusercontent.com",
+      "subject": "https://github.com/rsrp-ultra/*"
+    },
+    "key": {
+      "kms": "key:///rsrp-ultra/signing-key",
+      "keyRef": "rsrp-ultra-signing-key",
+      "useKMS": false
+    },
+    "attachments": {
+      "sbom": true,
+      "attestation": true,
+      "provenance": true
+    },
+    "transparent": {
+      "enabled": true,
+      "rekorUrl": "https://rekor.sigstore.dev"
+    },
+    "timestamp": {
+      "enabled": true,
+      "tlogUrl": "https://rekor.sigstore.dev"
+    }
+  },
+  "registry": {
+    "public": "ghcr.io/rsrp-ultra",
+    "private": "ghcr.io/rsrp-ultra/private"
+  },
+  "images": {
+    "api-service": {
+      "tag": "latest",
+      "digest": "sha256:..."
+    },
+    "crue-engine": {
+      "tag": "latest",
+      "digest": "sha256:..."
+    },
+    "crypto-core": {
+      "tag": "latest",
+      "digest": "sha256:..."
+    }
+  },
+  "policy": {
+    "enforcement": "enforce",
+    "require_signatures": true,
+    "require_sbom": true,
+    "require_provenance": true,
+    "trusted_identity": [
+      "https://github.com/rsrp-ultra/*"
+    ]
+  },
+  "sbom": {
+    "format": ["spdx", "cyclonedx"],
+    "upload": true
+  },
+  "attestation": {
+    "predicate_type": "spdx",
+    "upload": true
+  },
+  "provenance": {
+    "predicate_type": "slsa",
+    "upload": true
+  }
+}

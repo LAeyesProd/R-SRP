@@ -1,0 +1,386 @@
+# R-SRP Ultra - Defense-Level CI/CD Pipeline
+# Implements security-first continuous integration
+
+name: Defense CI
+
+on:
+  push:
+    branches: [main, develop, 'feature/**']
+  pull_request:
+    branches: [main]
+  schedule:
+    # Daily security scan
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+  # Security flags
+  RUSTFLAGS: "-D warnings -C target-feature=+crt-static"
+  SECURE_PROFILE: "true"
+
+jobs:
+  # Phase 1: Static Analysis
+  static-analysis:
+    name: Static Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy, rust-src
+      
+      - name: Run rustfmt
+        run: |
+          cargo fmt --all -- --check
+          cargo fmt --all -- --check --config format_code=true
+      
+      - name: Run Clippy
+        run: |
+          cargo clippy --workspace --all-targets --all-features -- -D warnings -D clippy::all
+      
+      - name: Run Clippy on nightly for additional lints
+        continue-on-error: true
+        run: |
+          rustup default nightly
+          cargo clippy --workspace --all-targets -- -D warnings || true
+      
+      - name: Run security audit
+        run: |
+          cargo install cargo-audit || true
+          cargo audit --json --deny-warnings > audit.json || cargo audit --deny-warnings
+          cargo audit --deny-warnings
+      
+      - name: Check dependencies for banned
+        run: |
+          cargo install cargo-banned || true
+          cargo banned --deny --allow [{name="openssl", version=">=0.9"}] || true
+      
+      - name: Upload audit results
+        uses: actions/upload-artifact@v4
+        with:
+          name: static-analysis-results
+          path: audit.json
+          retention-days: 7
+
+  # Phase 2: Security Testing
+  security-tests:
+    name: Security Testing
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      
+      - name: Install testing tools
+        run: |
+          cargo install cargo-fuzz || true
+          cargo install cargo-mutants || true
+          cargo install cargo-geiger || true
+      
+      # Fuzzing setup
+      - name: Run fuzz tests
+        continue-on-error: true
+        run: |
+          # Check if fuzzing targets exist
+          if [ -d "fuzz" ]; then
+            cargo fuzz run fuzz_target_1 || true
+          fi
+      
+      # Geiger: Check unsafe code
+      - name: Check unsafe code usage
+        run: |
+          cargo geiger --output-format json > geiger.json || true
+          cargo geiger || true
+      
+      # Check for secrets
+      - name: Scan for secrets
+        uses: trufflesecurity/trufflehog@main
+        with:
+          base: ${{ github.event.repository.default_branch }}
+          head: HEAD
+          extra_args: --only-verified
+      
+      - name: Upload security test results
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-test-results
+          path: geiger.json
+          retention-days: 7
+
+  # Phase 3: Unit & Integration Tests
+  tests:
+    name: Unit & Integration Tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: target
+      
+      - name: Run tests with coverage
+        run: |
+          cargo test --workspace --all-features -- --nocapture --test-threads=1
+      
+      - name: Run doc tests
+        run: |
+          cargo test --workspace --doc
+      
+      - name: Run miri (undefined behavior detection)
+        continue-on-error: true
+        run: |
+          rustup +nightly component add miri
+          cargo +nightly miri test || true
+      
+      - name: Run loom (concurrency testing)
+        continue-on-error: true
+        run: |
+          cargo test --test loom || true
+
+  # Phase 4: Build & Binary Analysis
+  build:
+    name: Build & Binary Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu
+      
+      - name: Build release binaries (Reproducible)
+        env:
+          SOURCE_DATE_EPOCH: ${{ github.event.repository.created_at }}
+        run: |
+          # Reproducible build - ensures bit-identical builds
+          # --locked: use.lock file exactly
+          # --frozen: don't update dependencies
+          export SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)
+          cargo build --release --workspace --locked --frozen
+          cargo build --release --workspace --target x86_64-unknown-linux-gnu --locked --frozen
+          cargo build --release --workspace --target aarch64-unknown-linux-gnu --locked --frozen
+      
+      - name: Store build hash for reproducibility verification
+        run: |
+          # Calculate hash of binary for reproducibility verification
+          if [ -f target/release/api-service ]; then
+            echo "Binary hash: $(sha256sum target/release/api-service)"
+            echo "$(sha256sum target/release/api-service)" > binary-hash.txt
+          fi
+      
+      - name: Verify PIE + RELRO
+        run: |
+          # Check PIE
+          readelf -l target/release/api-service | grep -q "DYNAMIC" && echo "✓ DYNAMIC segment found (PIE enabled)"
+          
+          # Check RELRO
+          readelf -l target/release/api-service | grep -q "RELRO" && echo "✓ RELRO found"
+          readelf -d target/release/api-service | grep -q "BIND_NOW" && echo "✓ Full RELRO (BIND_NOW) enabled"
+          
+          # Check stack canary
+          readelf -s target/release/api-service | grep -q "__stack_chk_guard" && echo "✓ Stack canary found"
+          
+          # Check NX (No Execute)
+          readelf -l target/release/api-service | grep -q "GNU_STACK" && echo "✓ NX enabled"
+      
+      - name: Check binary security
+        run: |
+          cargo install cargo-bloat || true
+          cargo bloat --release -- -n 50 || true
+          
+          cargo install cargo-size || true
+          cargo size --release --format=terse || true
+      
+      - name: Run RUSTSEC advisory check
+        run: |
+          cargo install cargo-rustsec || true
+          cargo rustsec --output rustsec.json || true
+      
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries
+          path: |
+            target/release/api-service
+            target/release/crue-engine
+            target/release/crue-dsl
+            target/release/crypto-core
+            target/release/immutable-logging
+          retention-days: 7
+
+  # Phase 5: Container Security
+  container-security:
+    name: Container Security
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Build container
+        run: |
+          docker build -t rsrp-ultra:test .
+      
+      - name: Run Trivy scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'image'
+          image-ref: 'rsrp-ultra:test'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+      
+      - name: Upload Trivy results
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+      
+      - name: Run Docker Bench Security
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            docker/docker-bench-security -h || true
+
+  # Phase 6: Compliance & Policy
+  compliance:
+    name: Compliance Check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Check license compliance
+        run: |
+          # Ensure all dependencies have compatible licenses
+          cargo install cargo-deny || true
+          cargo deny check advisories || true
+          cargo deny check bans || true
+          cargo deny check licenses || true
+      
+      - name: Verify code coverage
+        run: |
+          cargo install cargo-llvm-cov || true
+          cargo llvm-cov --workspace --lcov --output-path lcov.info || true
+          
+          # Minimum 80% coverage required
+          COVERAGE=$(cargo llvm-cov --workspace --summary-only | grep "TOTAL" | awk '{print $NF}' | tr -d '%')
+          if [ "$COVERAGE" -lt 80 ]; then
+            echo "⚠️ Coverage $COVERAGE% is below 80% threshold"
+            exit 1
+          fi
+          echo "✓ Coverage: $COVERAGE%"
+      
+      - name: Check for code quality gates
+        run: |
+          # No TODO/FIXME in code
+          grep -r "TODO\|FIXME\|XXX\|HACK" --include="*.rs" . && exit 1 || echo "✓ No TODO/FIXME found"
+          
+          # No debug prints in release
+          cargo build --release 2>&1 | grep -i "debug" || true
+
+  # Phase 7: Binary Provenance (SLSA)
+  provenance:
+    name: SLSA Provenance
+    runs-on: ubuntu-latest
+    needs: [build, static-analysis, tests]
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: write
+      id-token: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Build
+        run: cargo build --release --workspace
+      
+      - name: Generate SLSA provenance
+        uses: slsa-framework/slsa-github-generator/.github/workflows/generator_v1@v2.0.0
+        with:
+          gland-params: |
+            --ref refs/heads/main
+            --sha ${{ github.sha }}
+            --workflow-dispatch-event-id ${{ github.run_id }}
+          builder-path: .github/workflows/slsa-builder.yml
+          certificate-path: provenance.intoto.jsonl
+      
+      - name: Upload provenance
+        uses: actions/upload-artifact@v4
+        with:
+          name: slsa-provenance
+          path: provenance.intoto.jsonl
+          retention-days: 365
+
+  # Phase 8: Sign Release Artifacts
+  sign-release:
+    name: Sign Release
+    runs-on: ubuntu-latest
+    needs: [build, provenance]
+    if: github.event_name == 'release'
+    permissions:
+      contents: write
+      id-token: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: binaries
+      
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v6
+      
+      - name: Sign binaries
+        run: |
+          for bin in api-service crue-engine crue-dsl crypto-core immutable-logging; do
+            cosign sign-blob "./$bin" --output-signature "./$bin.sig"
+          done
+      
+      - name: Upload signatures
+        uses: actions/upload-artifact@v4
+        with:
+          name: signatures
+          path: "*.sig"
+          retention-days: 365

@@ -1,0 +1,22 @@
+# Immutable Logging - Append-only audit logs with cryptographic proof
+
+[package]
+name = "immutable-logging"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+sha2 = "0.10"
+blake3 = "1.5"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.7", features = ["v4", "serde"] }
+thiserror = "1.0"
+tracing = "0.1"
+tokio = { version = "1.35", features = ["sync", "rt"] }
+
+[dev-dependencies]
+tempfile = "3.8"

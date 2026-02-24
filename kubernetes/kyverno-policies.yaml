@@ -1,0 +1,281 @@
+# Kyverno Cluster Policies for R-SRP Ultra
+# Enforces image signature verification at cluster level
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: verify-rsrp-images
+  annotations:
+    policies.kyverno.io/title: Verify R-SRP Images
+    policies.kyverno.io/description: >
+      Ensures all R-SRP container images are signed with Cosign
+      and verified against the transparency log.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: verify-cosign-signature
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - rsrp-prod
+                - rsrp-staging
+      verifyImages:
+        - image: "ghcr.io/rsrp-ultra/*"
+          keyless:
+            issuer: "https://token.actions.githubusercontent.com"
+            subject: "https://github.com/rsrp-ultra/*"
+            rekor:
+              url: https://rekor.sigstore.dev
+          # Require attestations
+          attestors:
+            - count: 1
+              entries:
+                - keyless:
+                    issuer: "https://token.actions.githubusercontent.com"
+                    subject: "https://github.com/rsrp-ultra/*"
+        - image: "docker.io/rsrp/*"
+          keyless:
+            issuer: "https://token.actions.githubusercontent.com"
+            subject: "https://github.com/rsrp-ultra/*"
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: restrict-container-capabilities
+  annotations:
+    policies.kyverno.io/title: Restrict Container Capabilities
+    policies.kyverno.io/description: >
+      Drops all capabilities and enforces read-only root filesystem.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: drop-all-capabilities
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - rsrp-prod
+                - rsrp-staging
+      preconditions:
+        any:
+          - key: "{{ request.operation }}"
+            operator: In
+            value:
+              - CREATE
+              - UPDATE
+      mutate:
+        patchStrategicMerge:
+          spec:
+            containers:
+              - securityContext:
+                  capabilities:
+                    drop:
+                      - ALL
+    - name: readonly-root-filesystem
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - rsrp-prod
+                - rsrp-staging
+      preconditions:
+        any:
+          - key: "{{ request.operation }}"
+            operator: In
+            value:
+              - CREATE
+              - UPDATE
+      mutate:
+        patchStrategicMerge:
+          spec:
+            containers:
+              - securityContext:
+                  readOnlyRootFilesystem: true
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-seccomp-profile
+  annotations:
+    policies.kyverno.io/title: Require Seccomp Profile
+    policies.kyverno.io/description: >
+      Requires all pods to run with the RuntimeDefault seccomp profile.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: require-runtime-default-seccomp
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - rsrp-prod
+      preconditions:
+        any:
+          - key: "{{ request.operation }}"
+            operator: In
+            value:
+              - CREATE
+              - UPDATE
+      mutate:
+        patchStrategicMerge:
+          spec:
+            securityContext:
+              seccompProfile:
+                type: RuntimeDefault
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-run-as-non-root
+  annotations:
+    policies.kyverno.io/title: Require Non-Root User
+    policies.kyverno.io/description: >
+      Ensures all containers run as non-root user.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: run-as-non-root-user
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - rsrp-prod
+                - rsrp-staging
+      preconditions:
+        any:
+          - key: "{{ request.operation }}"
+            operator: In
+            value:
+              - CREATE
+              - UPDATE
+      validate:
+        message: >-
+          Running as root is not allowed. The container must 
+          specify a runAsNonRoot rule with a numeric uid greater than 0.
+        pattern:
+          spec:
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: ">0"
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: restrict-host-path
+  annotations:
+    policies.kyverno.io/title: Restrict Host Path
+    policies.kyverno.io/description: >
+      Restricts hostPath volume mounts to specific paths.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: restrict-host-path
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - rsrp-prod
+                - rsrp-staging
+      preconditions:
+        any:
+          - key: "{{ request.operation }}"
+            operator: In
+            value:
+              - CREATE
+              - UPDATE
+      validate:
+        message: >-
+          HostPath volumes are not allowed. Use PersistentVolumeClaims
+          or emptyDir instead.
+        pattern:
+          spec:
+            (volumes):
+              - notEqual:
+                  hostPath: "*"
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-network-policy
+  annotations:
+    policies.kyverno.io/title: Require Network Policy
+    policies.kyverno.io/description: >
+      Ensures all namespaces have a NetworkPolicy defined.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: require-network-policy
+      match:
+        any:
+          - resources:
+              kinds:
+                - Namespace
+      preconditions:
+        any:
+          - key: "{{ request.operation }}"
+            operator: In
+            value:
+              - CREATE
+      validate:
+        message: >-
+          NetworkPolicy is required for namespace {{ request.object.metadata.name }}.
+        anyPattern:
+          - metadata:
+              labels:
+                network-policy: "true"
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: block-privileged-containers
+  annotations:
+    policies.kyverno.io/title: Block Privileged Containers
+    policies.kyverno.io/description: >
+      Blocks creation of privileged containers.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: block-privileged
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - rsrp-prod
+                - rsrp-staging
+      preconditions:
+        any:
+          - key: "{{ request.operation }}"
+            operator: In
+            value:
+              - CREATE
+              - UPDATE
+      validate:
+        message: >-
+          Privileged containers are not allowed.
+        pattern:
+          spec:
+            (containers):
+              - securityContext:
+                  privileged: "false"

@@ -1,0 +1,81 @@
+# R-SRP Ultra - Registre National des Comptes Bancaires
+# Architecture Zero-Trust niveau État
+
+[workspace]
+members = [
+    "crates/crue-engine",
+    "crates/crue-dsl",
+    "crates/crypto-core",
+    "crates/immutable-logging",
+    "crates/api-gateway",
+    "crates/identity-proxy",
+    "crates/anomaly-detector",
+    "crates/pqcrypto",
+    "services/api-service",
+]
+
+[workspace.package]
+version = "1.0.0"
+edition = "2021"
+license = "EUPL-1.2"
+authors = ["R-SRP Architecture Team"]
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1.35", features = ["full"] }
+
+# Web framework
+axum = "0.7"
+tower = "0.4"
+
+# Cryptography
+sha2 = "0.10"
+blake3 = "1.5"
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+rsa = { version = "0.9", features = ["sha2"] }
+signature = "2.2"
+digest = "0.10"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# UUID
+uuid = { version = "1.7", features = ["v4", "serde"] }
+
+# Async utilities
+async-trait = "0.1"
+
+# JWT
+jsonwebtoken = "9.2"
+
+[profile.release]
+opt-level = 3
+lto = "fat"  # Link Time Optimization for better security
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# Security hardening flags
+# PIE (Position Independent Executable) - enabled by default on modern linkers
+# RELRO (Relocation Read-Only) - partial by default, full with "full"
+[profile.release.package.*]
+opt-level = 3
+
+# Enable security features via RUSTFLAGS
+# These are applied via .cargo/config.toml
+
+[profile.dev]
+opt-level = 0
+debug = true

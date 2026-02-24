@@ -1,0 +1,67 @@
+# PQCrypto - Post-Quantum Cryptography for R-SRP Ultra
+# Hybrid mode: Classical + Post-Quantum
+# Implements NIST PQC Standards (2024)
+
+[package]
+name = "pqcrypto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+# Classical crypto (already in workspace)
+ed25519-dalek = { version = "2.1", features = ["rand_core", "serde"] }
+rsa = { version = "0.9", features = ["sha2", "serde"] }
+sha2 = "0.10"
+signature = "2.2"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Async
+tokio = { version = "1.35", features = ["rt"] }
+
+# Zeroize for secure memory
+zeroize = { version = "1.7", features = ["derive"] }
+
+# Randomness
+rand = "0.8"
+
+# Base64 encoding
+base64 = "0.22"
+
+[build-dependencies]
+# Build script for system liboqs
+system-deps = "6.0"
+
+[features]
+default = ["use-liboqs"]
+use-liboqs = ["dep:system-deps"]
+use-pure-rust = []
+
+# Enable Dilithium (signature)
+dilithium2 = []
+dilithium3 = []
+dilithium5 = []
+
+# Enable Kyber (KEM)
+kyber512 = []
+kyber768 = []
+kyber1024 = []
+
+# Falcon (signature) - large keys
+falcon512 = []
+falcon1024 = []
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true

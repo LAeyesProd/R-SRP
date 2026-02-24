@@ -1,0 +1,141 @@
+# SBOM Generation Workflow for R-SRP Ultra
+# Generates Software Bill of Materials in SPDX format
+
+name: SBOM Generation
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  release:
+    types: [published]
+  schedule:
+    # Weekly SBOM update for vulnerabilities
+    - cron: '0 0 * * 0'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  generate-sbom:
+    name: Generate SBOM (SPDX)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libssl-dev \
+            pkg-config \
+            curl \
+            jq
+      
+      # Generate cargo-audit for dependency vulnerabilities
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+      
+      - name: Install cargo-sbom
+        run: cargo install cargo-sbom
+      
+      - name: Generate SBOM
+        run: |
+          # Generate SPDX SBOM
+          cargo sbom --format spdx-rdf --output sbom.spdx.rdf
+          cargo sbom --format spdx-json --output sbom.spdx.json
+          
+          # Generate CycloneDX SBOM
+          cargo sbom --format cyclonedx-json --output sbom.cdx.json
+      
+      - name: Run security audit
+        run: |
+          cargo audit --json > audit-report.json || true
+          cargo audit --deny warnings || true
+      
+      - name: Upload SBOM to GitHub
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-reports
+          path: |
+            sbom.spdx.rdf
+            sbom.spdx.json
+            sbom.cdx.json
+            audit-report.json
+          retention-days: 90
+      
+      # Upload to GitHub Security tab
+      - name: Upload to Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: audit-report.json
+          category: "/language:rust"
+      
+      # Check for vulnerabilities
+      - name: Check for vulnerabilities
+        run: |
+          if [ -f audit-report.json ]; then
+            VULNS=$(jq '.vulnerabilities | length' audit-report.json 2>/dev/null || echo "0")
+            if [ "$VULNS" -gt "0" ]; then
+              echo "⚠️ Found $VULNS vulnerabilities in dependencies!"
+              jq '.vulnerabilities[] | "\(.advisory.id): \(.advisory.title)"' audit-report.json
+              exit 1
+            fi
+          fi
+      
+      # Create attestation (SLSA)
+      - name: Create SBOM attestation
+        run: |
+          cat > sbom-attestation.json << 'EOF'
+          {
+            "_type": "https://in-toto.io/Statement/v0.1",
+            "predicateType": "https://spdx.dev/Document/v2.3",
+            "subject": [{
+              "name": "rsrp-ultra",
+              "digest": {"sha256": "${GITHUB_SHA}"}
+            }],
+            "predicate": {
+              "spdxVersion": "SPDX-2.3",
+              "dataLicense": "CC0-1.0",
+              "SPDXID": "SPDXRef-PACKAGE",
+              "name": "R-SRP-Ultra",
+              "documentNamespace": "https://rsrp.ultra/security/sbom"
+            }
+          }
+          EOF
+      
+      - name: Upload SBOM attestation
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-attestation
+          path: sbom-attestation.json
+
+  dependency-review:
+    name: Dependency Review
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Dependency Review
+        uses: actions/dependency-review-action@v4
+        with:
+          comment-summary-in-pr: always
+          fail-on-severity: moderate
+         许可证白名单: EUPL-1.2

@@ -1,0 +1,136 @@
+replicaCount: 3
+
+image:
+  repository: rsrp/api-service
+  pullPolicy: IfNotPresent
+  tag: "1.0.0"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8080"
+  prometheus.io/path: "/metrics"
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+  # Seccomp profile - blocks execution of arbitrary code
+  seccompProfile:
+    type: RuntimeDefault
+  # Prevent container from accessing /proc/sys
+  sysctls: []
+  # Ensure pods can't share the host's IPC namespace
+  hostIPC: false
+  # Ensure pods can't share the host's network namespace
+  hostNetwork: false
+  # Ensure pods can't use host PID namespace
+  hostPID: false
+
+securityContext:
+  capabilities:
+    drop:
+    - ALL
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  # Required: prevents execution of code from stack
+  seccompProfile:
+    type: RuntimeDefault
+  # Prevent privilege escalation
+  privileged: false
+  # Ensure all files are readable only by owner
+  runAsNonRoot: true
+  runAsUser: 1000
+  # Prevent core dumps
+  fsGroup: 1000
+
+service:
+  type: ClusterIP
+  port: 8080
+  targetPort: 8080
+
+ingress:
+  enabled: true
+  className: "istio"
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+  hosts:
+    - host: api.rsrp.internal
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: rsrp-api-tls
+      hosts:
+        - api.rsrp.internal
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchLabels:
+              app: rsrp-api
+          topologyKey: kubernetes.io/hostname
+
+# Network policies
+networkPolicy:
+  enabled: true
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: production
+      ports:
+        - protocol: TCP
+          port: 8080
+
+# Pod Disruption Budget
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+
+# Liveness and Readiness Probes
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 8080
+  initialDelaySeconds: 10
+  periodSeconds: 5
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: 8080
+  initialDelaySeconds: 5
+  periodSeconds: 3
+  failureThreshold: 2
