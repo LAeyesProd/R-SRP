@@ -154,12 +154,7 @@ Our CI/CD includes:
 - Cryptographic verification
 - Automated restoration
 
-## Contact
 
-For security-related inquiries:
-- **Email**: security@rsrp-ultra.gouv.fr
-- **PGP Key**: Available on request
-- **Incident Hotline**: +33 1 XX XX XX XX (24/7)
 
 ---
 
