@@ -19,8 +19,8 @@ Use this file as a security target/policy document unless a control is explicitl
 We take security vulnerabilities seriously. Please report them responsibly:
 
 1. **Do NOT** create public GitHub issues for security vulnerabilities
-2. Email security reports to: security@rsrp-ultra.gouv.fr
-3. Include in your report:
+
+2. Include in your report:
    - Description of the vulnerability
    - Steps to reproduce
    - Potential impact assessment
