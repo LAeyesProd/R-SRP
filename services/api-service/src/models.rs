@@ -118,6 +118,48 @@ pub struct DailyRootResponse {
     pub published_at: String,
 }
 
+/// Daily publication verification response
+#[derive(Debug, Serialize)]
+pub struct DailyPublicationVerifyResponse {
+    pub date: String,
+    pub root_hash: String,
+    pub hourly_root_count: usize,
+    pub recomputed_root_hash: String,
+    pub root_hash_verified: bool,
+    pub previous_day_link_verified: Option<bool>,
+    pub previous_day_link_status: String,
+    pub previous_publication_date: Option<String>,
+    pub previous_publication_root_hash: Option<String>,
+    pub signature_present: bool,
+    pub signature_algorithm: Option<String>,
+    pub signature_key_id: Option<String>,
+    pub signature_verified: Option<bool>,
+    pub signature_public_key_hex: Option<String>,
+    pub tsa_present: bool,
+    pub tsa_url: Option<String>,
+    pub tsa_verified: Option<bool>,
+    pub tsa_status: Option<String>,
+    pub verified_at: String,
+}
+
+/// Daily publication response (creation + persistence info)
+#[derive(Debug, Serialize)]
+pub struct DailyPublishResponse {
+    pub date: String,
+    pub root_hash: String,
+    pub entry_count: u64,
+    pub previous_day_root: String,
+    pub published_at: String,
+    pub json_path: String,
+    pub gzip_path: Option<String>,
+    pub signature_algorithm: Option<String>,
+    pub signature_key_id: Option<String>,
+    pub signature_public_key_hex: Option<String>,
+    pub signature_verified: Option<bool>,
+    pub tsa_url: Option<String>,
+    pub tsa_timestamp: Option<String>,
+}
+
 /// Metrics response
 #[derive(Debug, Serialize)]
 pub struct MetricsResponse {

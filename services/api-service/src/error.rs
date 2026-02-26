@@ -7,6 +7,7 @@ use axum::{
 };
 use serde_json::json;
 
+#[derive(Debug)]
 pub struct ApiError {
     status: StatusCode,
     message: String,

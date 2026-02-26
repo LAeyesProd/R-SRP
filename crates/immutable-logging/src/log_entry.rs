@@ -151,6 +151,12 @@ struct CanonicalLogEntryCommit<'a> {
 }
 
 impl LogEntryBuilder {
+    pub fn mission(mut self, mission_id: Option<String>, mission_type: Option<String>) -> Self {
+        self.actor.mission_id = mission_id;
+        self.actor.mission_type = mission_type;
+        self
+    }
+
     pub fn request(mut self, request: RequestContext) -> Self {
         self.request = Some(request);
         self

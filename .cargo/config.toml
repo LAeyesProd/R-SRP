@@ -36,12 +36,6 @@ rustflags = [
 SOURCE_DATE_EPOCH = { value = "{{ SOURCE_DATE_EPOCH }}", force = true }
 CARGO_NET_GIT_FETCH_WITH_CLI = { value = "false", force = true }
 
-# Build options for reproducible builds
-[build]
-# Prevent network access during build
-frozen = true
-locked = true
-
 # Default target for all Rust targets
 [term]
 verbose = false
