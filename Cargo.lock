@@ -40,7 +40,7 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "api-service"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "anyhow",
  "axum",
@@ -1915,7 +1915,7 @@ dependencies = [
 
 [[package]]
 name = "rsrp-immutable-ledger"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "base64 0.22.1",
  "blake3",
@@ -1935,7 +1935,7 @@ dependencies = [
 
 [[package]]
 name = "rsrp-policy-dsl"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -1955,7 +1955,7 @@ dependencies = [
 
 [[package]]
 name = "rsrp-pqcrypto"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1975,7 +1975,7 @@ dependencies = [
 
 [[package]]
 name = "rsrp-proof-engine"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "chrono",
  "rsrp-policy-dsl",
@@ -1992,7 +1992,7 @@ dependencies = [
 
 [[package]]
 name = "rsrp-security-core"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "blake3",
  "chrono",
