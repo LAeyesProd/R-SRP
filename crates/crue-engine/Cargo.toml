@@ -1,15 +1,37 @@
-# CRUE Engine - Deterministic Rule Execution Engine
+# RSRP Proof Engine - Deterministic Decision Engine
+# Part of Rsrp.ProofEngine crate
+#
+# A lightweight, tamper-evident decision engine for critical systems.
 
 [package]
-name = "crue-engine"
+name = "rsrp-proof-engine"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
+description = "Deterministic proof engine for high-integrity Rust applications"
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "README.md"
+documentation = "https://docs.rs/rsrp-proof-engine"
+
+[lib]
+name = "crue_engine"
+
+[package.metadata.aliases]
+# Future: rsrp-proof-engine = "crue-engine"
+
+[features]
+default = ["std"]
+std = []
+# Enable deterministic timing (for compliance)
+deterministic = []
 
 [dependencies]
-crue-dsl = { path = "../crue-dsl" }
-crypto-core = { path = "../crypto-core" }
+crue-dsl = { package = "rsrp-policy-dsl", version = "0.9.1", path = "../crue-dsl" }
+crypto-core = { package = "rsrp-security-core", version = "0.9.1", path = "../crypto-core" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
