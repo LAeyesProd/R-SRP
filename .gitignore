@@ -1,2 +1,5 @@
 target/
+fuzz/artifacts/
+fuzz/corpus/
+fuzz/target/
 *.code-workspace

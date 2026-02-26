@@ -19,10 +19,10 @@ def verify_vector(v: dict) -> None:
     sig = canonical[len(signing) + 4:]
     assert len(sig) == sig_len, f"{v['id']}: signature length suffix mismatch"
 
-    runtime_packed = signing[2:4].hex()
-    assert runtime_packed == v["runtime_version_packed_u16_be_hex"], f"{v['id']}: runtime pack mismatch"
+    runtime_packed = signing[2:6].hex()
+    assert runtime_packed == v["runtime_version_packed_u32_be_hex"], f"{v['id']}: runtime pack mismatch"
 
-    decision_code = signing[132]
+    decision_code = signing[134]
     assert decision_code == v["decision_code"], f"{v['id']}: decision code mismatch"
 
     digest = hashlib.sha256(canonical).hexdigest()

@@ -10,7 +10,7 @@ type Vector = {
   canonical_bytes_len: number;
   canonical_bytes_hex: string;
   canonical_bytes_sha256_hex: string;
-  runtime_version_packed_u16_be_hex: string;
+  runtime_version_packed_u32_be_hex: string;
   decision_code: number;
 };
 
@@ -36,10 +36,10 @@ function verifyVector(v: Vector): void {
   const sig = canonical.subarray(signing.length + 4);
   if (sig.length !== sigLen) throw new Error(`${v.id}: signature len suffix mismatch`);
 
-  const runtimePacked = signing.subarray(2, 4).toString("hex");
-  if (runtimePacked !== v.runtime_version_packed_u16_be_hex) throw new Error(`${v.id}: runtime pack mismatch`);
+  const runtimePacked = signing.subarray(2, 6).toString("hex");
+  if (runtimePacked !== v.runtime_version_packed_u32_be_hex) throw new Error(`${v.id}: runtime pack mismatch`);
 
-  const decisionCode = signing[132];
+  const decisionCode = signing[134];
   if (decisionCode !== v.decision_code) throw new Error(`${v.id}: decision code mismatch`);
 
   const digest = crypto.createHash("sha256").update(canonical).digest("hex");

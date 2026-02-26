@@ -269,3 +269,17 @@ Le prochain saut de credibilite ne depend plus principalement du bytecode/VM, ma
 - evidence de robustesse (fuzz/bench),
 - revue externe,
 - et discipline de freeze de schema/API.
+
+## 9. Addendum Hardening v0.9.4 (Workspace)
+
+Correctifs appliques apres cette synthese:
+
+- `SEC-A01`: branche classique Hybrid KEM remplacee par X25519 ECDH reel (cle eph + decapsulation reelle) et derivee HKDF
+- `SEC-A01`: ajout d'un tag de liaison classique/quantique (fail-on-tamper) pour rejeter les alterations ciphertext
+- `SEC-A02`: pipeline DSL signature/verification aligne sur Ed25519 (suppression du chemin HMAC/BLAKE3 incoherent)
+- `SEC-A03`: reduction de surface d'exposition des secrets (secret fields non publics sur keypairs hybrides)
+- `LogEntry::new(...)`: suppression du fallback silencieux, API fail-closed en `Result`
+- `ProofBinding`: encodage canonique binaire structure (plus de payload JSON dans l'attestation)
+- `ProofEnvelopeV1`: `runtime_version` migre en `u32` (`major.minor.patch`)
+- `crates/crypto-core`: stubs RSA-PSS remplaces par sign/verify RSA-PSS-SHA256 reels
+- `DSL compiler`: operateurs `IN` et `BETWEEN` compiles et verifies en execution VM

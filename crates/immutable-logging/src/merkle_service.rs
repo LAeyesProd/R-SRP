@@ -121,7 +121,11 @@ impl MerkleService {
         let mut next = Vec::with_capacity(level.len().div_ceil(2));
         for chunk in level.chunks(2) {
             let left = &chunk[0];
-            let right = if chunk.len() == 2 { &chunk[1] } else { &chunk[0] };
+            let right = if chunk.len() == 2 {
+                &chunk[1]
+            } else {
+                &chunk[0]
+            };
             let mut combined = left.clone();
             combined.extend_from_slice(right);
             next.push(Self::hash_entry(&combined));
@@ -148,7 +152,11 @@ impl MerkleService {
     }
 
     /// Build proof path for a leaf index
-    fn build_proof_path(&self, entries: &[Vec<u8>], mut index: usize) -> Option<Vec<MerkleProofStep>> {
+    fn build_proof_path(
+        &self,
+        entries: &[Vec<u8>],
+        mut index: usize,
+    ) -> Option<Vec<MerkleProofStep>> {
         if entries.is_empty() || index >= entries.len() {
             return None;
         }
@@ -158,10 +166,18 @@ impl MerkleService {
 
         while level.len() > 1 {
             let is_right = index % 2 == 1;
-            let sibling_index = if is_right { index - 1 } else { (index + 1).min(level.len() - 1) };
+            let sibling_index = if is_right {
+                index - 1
+            } else {
+                (index + 1).min(level.len() - 1)
+            };
             let sibling_hash = Self::hex_encode(&level[sibling_index]);
             proof.push(MerkleProofStep {
-                side: if is_right { "left".to_string() } else { "right".to_string() },
+                side: if is_right {
+                    "left".to_string()
+                } else {
+                    "right".to_string()
+                },
                 hash: sibling_hash,
             });
 
@@ -251,8 +267,8 @@ mod tests {
     #[tokio::test]
     async fn test_merkle_proof_roundtrip() {
         let mut service = MerkleService::new();
-        let e1 = LogEntry::new(EventType::AccountQuery, "a".to_string(), "o".to_string());
-        let e2 = LogEntry::new(EventType::AuthSuccess, "b".to_string(), "o".to_string());
+        let e1 = LogEntry::new(EventType::AccountQuery, "a".to_string(), "o".to_string()).unwrap();
+        let e2 = LogEntry::new(EventType::AuthSuccess, "b".to_string(), "o".to_string()).unwrap();
         service.add_entry(e1.clone()).await.unwrap();
         service.add_entry(e2.clone()).await.unwrap();
 

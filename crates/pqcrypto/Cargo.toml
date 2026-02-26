@@ -49,6 +49,7 @@ ed25519-dalek = { version = "2.1", features = ["rand_core", "serde"] }
 rsa = { version = "0.9", features = ["sha2", "serde"] }
 sha2 = "0.10"
 hkdf = "0.12"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
 signature = "2.2"
 
 # Serialization

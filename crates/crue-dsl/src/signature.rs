@@ -1,11 +1,11 @@
 //! CRUE Rule Signature Module
-//! 
-//! Handles RSA-PSS signing and verification of compiled rules
+//!
+//! Handles Ed25519 signing and verification of compiled rules
 
-use crate::error::Result;
 use crate::error::DslError;
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
-use sha2::{Sha256, Digest};
+use crate::error::Result;
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use sha2::{Digest, Sha256};
 
 /// Rule signature metadata
 #[derive(Debug, Clone)]
@@ -22,7 +22,7 @@ pub struct SignatureMetadata {
 pub trait RuleSigner {
     /// Sign rule bytecode
     fn sign(&self, bytecode: &[u8]) -> Result<Vec<u8>>;
-    
+
     /// Get key ID
     fn key_id(&self) -> &str;
 }
@@ -33,32 +33,33 @@ pub trait RuleVerifier {
     fn verify(&self, bytecode: &[u8], signature: &[u8], key_id: &str) -> Result<bool>;
 }
 
-/// In-memory signer for testing
-pub struct InMemorySigner {
+/// In-memory Ed25519 signer for testing and deterministic bootstrap scenarios.
+pub struct Ed25519InMemorySigner {
     key_id: String,
-    private_key: Vec<u8>,
+    signing_key: SigningKey,
 }
 
-impl InMemorySigner {
-    pub fn new(key_id: String, private_key: Vec<u8>) -> Self {
-        InMemorySigner { key_id, private_key }
+impl Ed25519InMemorySigner {
+    pub fn new(key_id: String, private_key: Vec<u8>) -> Result<Self> {
+        if private_key.len() != 32 {
+            return Err(DslError::SignatureError(
+                "Ed25519 private key must be exactly 32 bytes".to_string(),
+            ));
+        }
+        let mut key = [0u8; 32];
+        key.copy_from_slice(&private_key);
+        Ok(Self {
+            key_id,
+            signing_key: SigningKey::from_bytes(&key),
+        })
     }
 }
 
-impl RuleSigner for InMemorySigner {
+impl RuleSigner for Ed25519InMemorySigner {
     fn sign(&self, bytecode: &[u8]) -> Result<Vec<u8>> {
-        // In production, this would use RSA-PSS via rsa crate
-        // For now, create a simple HMAC signature
-        use blake3::Hasher;
-        
-        let key = blake3::hash(&self.private_key);
-        let mut hasher = Hasher::new_keyed(key.as_bytes());
-        hasher.update(bytecode);
-        let result = hasher.finalize();
-        
-        Ok(result.as_bytes().to_vec())
+        Ok(self.signing_key.sign(bytecode).to_bytes().to_vec())
     }
-    
+
     fn key_id(&self) -> &str {
         &self.key_id
     }
@@ -90,6 +91,9 @@ pub fn verify_signature(
     Ok(verifying_key.verify(bytecode, &parsed_sig).is_ok())
 }
 
+/// Backward-compatible alias while migrating call-sites.
+pub type InMemorySigner = Ed25519InMemorySigner;
+
 /// Generate rule source hash for signing
 pub fn hash_source(source: &str) -> String {
     let mut hasher = Sha256::new();
@@ -106,14 +110,14 @@ pub fn verify_source_hash(source: &str, expected_hash: &str) -> bool {
 mod tests {
     use super::*;
     use ed25519_dalek::Signer;
-    
+
     #[test]
     fn test_source_hash() {
         let source = "RULE CRUE_001 VERSION 1.0";
         let hash = hash_source(source);
         assert_eq!(hash.len(), 64);
     }
-    
+
     #[test]
     fn test_verify_source_hash() {
         let source = "RULE CRUE_001 VERSION 1.0";
@@ -121,16 +125,17 @@ mod tests {
         assert!(verify_source_hash(source, &hash));
         assert!(!verify_source_hash(source, "invalid"));
     }
-    
+
     #[test]
     fn test_signer() {
-        let key = b"test_key_32_bytes_for_signing!";
-        let signer = InMemorySigner::new("test-key-001".to_string(), key.to_vec());
-        
+        let key = [42u8; 32];
+        let signer = InMemorySigner::new("test-key-001".to_string(), key.to_vec()).unwrap();
+
         let bytecode = b"test bytecode";
         let signature = signer.sign(bytecode).unwrap();
-        
+
         assert!(!signature.is_empty());
+        assert_eq!(signature.len(), 64);
         assert_eq!(signer.key_id(), "test-key-001");
     }
 
@@ -142,7 +147,15 @@ mod tests {
         let bytecode = b"compiled-rule-bytecode";
         let sig = signing_key.sign(bytecode);
 
-        assert!(verify_signature(bytecode, &sig.to_bytes(), "k1", &verifying_key.to_bytes()).unwrap());
-        assert!(!verify_signature(b"tampered", &sig.to_bytes(), "k1", &verifying_key.to_bytes()).unwrap());
+        assert!(
+            verify_signature(bytecode, &sig.to_bytes(), "k1", &verifying_key.to_bytes()).unwrap()
+        );
+        assert!(!verify_signature(
+            b"tampered",
+            &sig.to_bytes(),
+            "k1",
+            &verifying_key.to_bytes()
+        )
+        .unwrap());
     }
 }

@@ -589,7 +589,17 @@ async fn record_validation_decision_audit(
     request: &crue_engine::EvaluationRequest,
     result: &crue_engine::EvaluationResult,
 ) {
-    let entry = build_audit_log_entry(request, result);
+    let entry = match build_audit_log_entry(request, result) {
+        Ok(e) => e,
+        Err(err) => {
+            tracing::warn!(
+                "Failed to build immutable audit log entry for request {}: {}",
+                request.request_id,
+                err
+            );
+            return;
+        }
+    };
     if let Err(err) = state.logging.append(entry).await {
         tracing::warn!(
             "Failed to append immutable audit log for request {}: {}",
@@ -602,7 +612,7 @@ async fn record_validation_decision_audit(
 fn build_audit_log_entry(
     request: &crue_engine::EvaluationRequest,
     result: &crue_engine::EvaluationResult,
-) -> LogEntry {
+) -> Result<LogEntry, immutable_logging::error::LogError> {
     let event_type = match result.decision {
         crue_engine::decision::Decision::Allow => {
             if request.export_format.is_some() {
@@ -640,9 +650,7 @@ fn build_audit_log_entry(
         builder = builder.rule_id(rule_id.clone());
     }
 
-    builder
-        .build()
-        .unwrap_or_else(|_| LogEntry::new(event_type, request.agent_id.clone(), request.agent_org.clone()))
+    builder.build()
 }
 
 #[cfg(test)]
@@ -725,12 +733,10 @@ mod tests {
             evaluation_time_ms: 1,
         };
 
-        let entry = build_audit_log_entry(&request, &result);
-        assert_eq!(entry.event_type, EventType::RuleViolation);
-        assert_eq!(entry.decision, AuditDecision::Block);
-        assert_eq!(entry.rule_id.as_deref(), Some("CRUE_001"));
-        assert_eq!(entry.actor.mission_id.as_deref(), Some("MIS_001"));
-        assert!(entry.request.is_some());
+        let entry = build_audit_log_entry(&request, &result).unwrap();
+        assert_eq!(entry.event_type(), EventType::RuleViolation);
+        assert_eq!(entry.decision(), AuditDecision::Block);
+        assert_eq!(entry.rule_id(), Some("CRUE_001"));
     }
 
     #[test]

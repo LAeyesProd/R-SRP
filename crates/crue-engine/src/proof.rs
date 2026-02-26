@@ -99,7 +99,7 @@ pub enum SignatureV1 {
 pub struct ProofEnvelopeV1 {
     pub version: u8,
     pub encoding_version: u8,
-    pub runtime_version: u16,
+    pub runtime_version: u32,
     pub policy_hash: [u8; 32],
     pub bytecode_hash: [u8; 32],
     pub input_hash: [u8; 32],
@@ -116,14 +116,7 @@ impl ProofBinding {
         decision: Decision,
         crypto_backend_id: &str,
     ) -> Result<Self, String> {
-        Self::create_with_policy_hash(
-            bytecode,
-            request,
-            ctx,
-            decision,
-            crypto_backend_id,
-            None,
-        )
+        Self::create_with_policy_hash(bytecode, request, ctx, decision, crypto_backend_id, None)
     }
 
     pub fn create_with_policy_hash(
@@ -165,28 +158,44 @@ impl ProofBinding {
             crypto_backend_id,
             Some(&self.policy_hash),
         )?;
-        Ok(self.serialization_version == PROOF_BINDING_SERIALIZATION_VERSION
-            && self.schema_id == PROOF_BINDING_SCHEMA_ID
-            && self == &recomputed)
+        Ok(
+            self.serialization_version == PROOF_BINDING_SERIALIZATION_VERSION
+                && self.schema_id == PROOF_BINDING_SCHEMA_ID
+                && self == &recomputed,
+        )
     }
 
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, String> {
-        let json = canonical_json_bytes(self)?;
+        let payload = self.canonical_payload_bytes()?;
         let schema_len: u16 = self
             .schema_id
             .len()
             .try_into()
             .map_err(|_| "schema_id too long".to_string())?;
-        let payload_len: u32 = json
+        let payload_len: u32 = payload
             .len()
             .try_into()
             .map_err(|_| "payload too long".to_string())?;
-        let mut out = Vec::with_capacity(1 + 2 + self.schema_id.len() + 4 + json.len());
+        let mut out = Vec::with_capacity(1 + 2 + self.schema_id.len() + 4 + payload.len());
         out.push(self.serialization_version);
         out.extend_from_slice(&schema_len.to_be_bytes());
         out.extend_from_slice(self.schema_id.as_bytes());
         out.extend_from_slice(&payload_len.to_be_bytes());
-        out.extend_from_slice(&json);
+        out.extend_from_slice(&payload);
+        Ok(out)
+    }
+
+    fn canonical_payload_bytes(&self) -> Result<Vec<u8>, String> {
+        let mut out = Vec::with_capacity(
+            1 + 2 + self.runtime_version.len() + 2 + self.crypto_backend_id.len() + (32 * 4) + 1,
+        );
+        encode_len_prefixed_str(&mut out, &self.runtime_version)?;
+        encode_len_prefixed_str(&mut out, &self.crypto_backend_id)?;
+        out.extend_from_slice(&hex32(&self.policy_hash)?);
+        out.extend_from_slice(&hex32(&self.bytecode_hash)?);
+        out.extend_from_slice(&hex32(&self.input_hash)?);
+        out.extend_from_slice(&hex32(&self.state_hash)?);
+        out.push(decision_to_code(self.decision) as u8);
         Ok(out)
     }
 }
@@ -252,9 +261,7 @@ impl PqProofEnvelope {
         keypair: &pqcrypto::hybrid::HybridKeyPair,
     ) -> Result<Self, String> {
         let payload = binding.canonical_bytes()?;
-        let signature = signer
-            .sign(keypair, &payload)
-            .map_err(|e| e.to_string())?;
+        let signature = signer.sign(keypair, &payload).map_err(|e| e.to_string())?;
 
         Ok(Self {
             serialization_version: PQ_PROOF_ENVELOPE_SERIALIZATION_VERSION,
@@ -295,15 +302,20 @@ impl ProofEnvelopeV1 {
         signer_key_id: impl AsRef<str>,
         key_pair: &crypto_core::signature::Ed25519KeyPair,
     ) -> Result<Self, String> {
-        let mut envelope = Self::unsigned_from_binding(binding, SignatureV1::Ed25519(Ed25519SignatureV1 {
-            key_id_hash: sha256_fixed(signer_key_id.as_ref().as_bytes()),
-            signature: Vec::new(),
-        }))?;
+        let mut envelope = Self::unsigned_from_binding(
+            binding,
+            SignatureV1::Ed25519(Ed25519SignatureV1 {
+                key_id_hash: sha256_fixed(signer_key_id.as_ref().as_bytes()),
+                signature: Vec::new(),
+            }),
+        )?;
         let payload = envelope.signing_bytes()?;
         match &mut envelope.signature {
             SignatureV1::Ed25519(sig) => sig.signature = key_pair.sign(&payload),
             #[cfg(feature = "pq-proof")]
-            SignatureV1::Hybrid(_) => return Err("invalid signature variant for ed25519 signing".to_string()),
+            SignatureV1::Hybrid(_) => {
+                return Err("invalid signature variant for ed25519 signing".to_string())
+            }
         }
         Ok(envelope)
     }
@@ -377,7 +389,7 @@ impl ProofEnvelopeV1 {
 
     /// Canonical bytes excluding signature material (signing payload).
     pub fn signing_bytes(&self) -> Result<Vec<u8>, String> {
-        let mut out = Vec::with_capacity(1 + 1 + 2 + (32 * 4) + 1);
+        let mut out = Vec::with_capacity(1 + 1 + 4 + (32 * 4) + 1);
         out.push(self.version);
         out.push(self.encoding_version);
         out.extend_from_slice(&self.runtime_version.to_be_bytes());
@@ -409,15 +421,55 @@ impl ProofEnvelopeV1 {
         Ok(out)
     }
 
+    /// Decode canonical bytes produced by `canonical_bytes`.
+    pub fn from_canonical_bytes(bytes: &[u8]) -> Result<Self, String> {
+        let mut cursor = 0usize;
+        let version = read_u8(bytes, &mut cursor)?;
+        let encoding_version = read_u8(bytes, &mut cursor)?;
+        let runtime_version = read_u32_be(bytes, &mut cursor)?;
+        let policy_hash = read_fixed_32(bytes, &mut cursor)?;
+        let bytecode_hash = read_fixed_32(bytes, &mut cursor)?;
+        let input_hash = read_fixed_32(bytes, &mut cursor)?;
+        let state_hash = read_fixed_32(bytes, &mut cursor)?;
+        let decision_code = read_u8(bytes, &mut cursor)?;
+
+        let sig_meta_len = read_u16_be(bytes, &mut cursor)? as usize;
+        let sig_meta = read_slice(bytes, &mut cursor, sig_meta_len)?;
+        let mut signature = SignatureV1::from_meta_bytes(sig_meta)?;
+
+        let sig_len = read_u32_be(bytes, &mut cursor)? as usize;
+        let sig_bytes = read_slice(bytes, &mut cursor, sig_len)?;
+        signature.attach_signature_bytes(sig_bytes)?;
+
+        if cursor != bytes.len() {
+            return Err("unexpected trailing bytes in ProofEnvelopeV1".to_string());
+        }
+
+        Ok(Self {
+            version,
+            encoding_version,
+            runtime_version,
+            policy_hash,
+            bytecode_hash,
+            input_hash,
+            state_hash,
+            decision_code,
+            signature,
+        })
+    }
+
     pub fn decision(&self) -> Result<Decision, String> {
         decision_from_code(self.decision_code)
     }
 
-    fn unsigned_from_binding(binding: &ProofBinding, signature: SignatureV1) -> Result<Self, String> {
+    fn unsigned_from_binding(
+        binding: &ProofBinding,
+        signature: SignatureV1,
+    ) -> Result<Self, String> {
         Ok(Self {
             version: PROOF_ENVELOPE_V1_VERSION,
             encoding_version: PROOF_ENVELOPE_V1_ENCODING_VERSION,
-            runtime_version: pack_runtime_version_u16(&binding.runtime_version)?,
+            runtime_version: pack_runtime_version_u32(&binding.runtime_version)?,
             policy_hash: hex32(&binding.policy_hash)?,
             bytecode_hash: hex32(&binding.bytecode_hash)?,
             input_hash: hex32(&binding.input_hash)?,
@@ -456,6 +508,70 @@ impl SignatureV1 {
             SignatureV1::Hybrid(sig) => sig.signature.to_bytes(),
         }
     }
+
+    fn from_meta_bytes(meta: &[u8]) -> Result<Self, String> {
+        if meta.is_empty() {
+            return Err("missing signature metadata".to_string());
+        }
+        match meta[0] {
+            x if x == SignatureAlgorithmCodeV1::Ed25519 as u8 => {
+                if meta.len() != 1 + 32 {
+                    return Err("invalid Ed25519 signature metadata length".to_string());
+                }
+                let mut key_id_hash = [0u8; 32];
+                key_id_hash.copy_from_slice(&meta[1..33]);
+                Ok(SignatureV1::Ed25519(Ed25519SignatureV1 {
+                    key_id_hash,
+                    signature: Vec::new(),
+                }))
+            }
+            #[cfg(feature = "pq-proof")]
+            x if x == SignatureAlgorithmCodeV1::HybridEd25519Mldsa as u8 => {
+                if meta.len() != 1 + 32 + 32 + 1 {
+                    return Err("invalid Hybrid signature metadata length".to_string());
+                }
+                let mut key_id_hash = [0u8; 32];
+                key_id_hash.copy_from_slice(&meta[1..33]);
+                let mut backend_id_hash = [0u8; 32];
+                backend_id_hash.copy_from_slice(&meta[33..65]);
+                let level_code = meta[65];
+                let level = dilithium_level_from_code(level_code)?;
+                Ok(SignatureV1::Hybrid(HybridSignatureV1 {
+                    key_id_hash,
+                    backend_id_hash,
+                    level_code,
+                    signature: pqcrypto::hybrid::HybridSignature::new(
+                        Vec::new(),
+                        pqcrypto::signature::DilithiumSignature {
+                            level,
+                            signature: Vec::new(),
+                        },
+                    ),
+                }))
+            }
+            _ => Err(format!("unknown signature algorithm code {}", meta[0])),
+        }
+    }
+
+    fn attach_signature_bytes(&mut self, signature_bytes: &[u8]) -> Result<(), String> {
+        match self {
+            SignatureV1::Ed25519(sig) => {
+                if signature_bytes.len() != 64 {
+                    return Err("invalid Ed25519 signature length".to_string());
+                }
+                sig.signature = signature_bytes.to_vec();
+                Ok(())
+            }
+            #[cfg(feature = "pq-proof")]
+            SignatureV1::Hybrid(sig) => {
+                let level = dilithium_level_from_code(sig.level_code)?;
+                sig.signature =
+                    pqcrypto::hybrid::HybridSignature::from_bytes(level, signature_bytes)
+                        .map_err(|e| e.to_string())?;
+                Ok(())
+            }
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -467,7 +583,8 @@ struct StateField<'a> {
 fn state_snapshot(ctx: &EvaluationContext) -> Vec<StateField<'_>> {
     let mut items: Vec<_> = ctx.fields().iter().collect();
     items.sort_by(|(ka, _), (kb, _)| ka.cmp(kb));
-    items.into_iter()
+    items
+        .into_iter()
         .map(|(key, value)| StateField {
             key: key.as_str(),
             value,
@@ -477,6 +594,16 @@ fn state_snapshot(ctx: &EvaluationContext) -> Vec<StateField<'_>> {
 
 fn canonical_json_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>, String> {
     serde_json::to_vec(value).map_err(|e| e.to_string())
+}
+
+fn encode_len_prefixed_str(out: &mut Vec<u8>, value: &str) -> Result<(), String> {
+    let len: u16 = value
+        .len()
+        .try_into()
+        .map_err(|_| "string field too long".to_string())?;
+    out.extend_from_slice(&len.to_be_bytes());
+    out.extend_from_slice(value.as_bytes());
+    Ok(())
 }
 
 fn sha256_hex(data: &[u8]) -> String {
@@ -501,23 +628,29 @@ fn hex32(hex: &str) -> Result<[u8; 32], String> {
     Ok(out)
 }
 
-fn pack_runtime_version_u16(runtime_version: &str) -> Result<u16, String> {
-    // Packs semver major.minor.patch as (major << 8) | minor.
+fn pack_runtime_version_u32(runtime_version: &str) -> Result<u32, String> {
+    // Packs semver major.minor.patch as (major << 24) | (minor << 16) | patch.
     let mut parts = runtime_version.split('.');
-    let major: u16 = parts
+    let major: u32 = parts
         .next()
         .ok_or_else(|| "missing major runtime version".to_string())?
         .parse()
         .map_err(|_| "invalid major runtime version".to_string())?;
-    let minor: u16 = parts
+    let minor: u32 = parts
         .next()
         .ok_or_else(|| "missing minor runtime version".to_string())?
         .parse()
         .map_err(|_| "invalid minor runtime version".to_string())?;
-    if major > 0xFF || minor > 0xFF {
-        return Err("runtime_version major/minor exceed u8 packing".to_string());
+    let patch: u32 = match parts.next() {
+        Some(p) if !p.is_empty() => p
+            .parse()
+            .map_err(|_| "invalid patch runtime version".to_string())?,
+        _ => 0,
+    };
+    if major > 0xFF || minor > 0xFF || patch > 0xFFFF {
+        return Err("runtime_version component exceeds u32 packing limits".to_string());
     }
-    Ok((major << 8) | minor)
+    Ok((major << 24) | (minor << 16) | patch)
 }
 
 fn decision_to_code(decision: Decision) -> DecisionCodeV1 {
@@ -546,6 +679,51 @@ fn dilithium_level_code(level: pqcrypto::DilithiumLevel) -> u8 {
         pqcrypto::DilithiumLevel::Dilithium3 => 3,
         pqcrypto::DilithiumLevel::Dilithium5 => 5,
     }
+}
+
+#[cfg(feature = "pq-proof")]
+fn dilithium_level_from_code(code: u8) -> Result<pqcrypto::DilithiumLevel, String> {
+    match code {
+        2 => Ok(pqcrypto::DilithiumLevel::Dilithium2),
+        3 => Ok(pqcrypto::DilithiumLevel::Dilithium3),
+        5 => Ok(pqcrypto::DilithiumLevel::Dilithium5),
+        _ => Err(format!("invalid Dilithium level code {}", code)),
+    }
+}
+
+fn read_u8(data: &[u8], cursor: &mut usize) -> Result<u8, String> {
+    if *cursor >= data.len() {
+        return Err("unexpected EOF reading u8".to_string());
+    }
+    let v = data[*cursor];
+    *cursor += 1;
+    Ok(v)
+}
+
+fn read_u16_be(data: &[u8], cursor: &mut usize) -> Result<u16, String> {
+    let slice = read_slice(data, cursor, 2)?;
+    Ok(u16::from_be_bytes([slice[0], slice[1]]))
+}
+
+fn read_u32_be(data: &[u8], cursor: &mut usize) -> Result<u32, String> {
+    let slice = read_slice(data, cursor, 4)?;
+    Ok(u32::from_be_bytes([slice[0], slice[1], slice[2], slice[3]]))
+}
+
+fn read_fixed_32(data: &[u8], cursor: &mut usize) -> Result<[u8; 32], String> {
+    let slice = read_slice(data, cursor, 32)?;
+    let mut out = [0u8; 32];
+    out.copy_from_slice(slice);
+    Ok(out)
+}
+
+fn read_slice<'a>(data: &'a [u8], cursor: &mut usize, len: usize) -> Result<&'a [u8], String> {
+    if data.len().saturating_sub(*cursor) < len {
+        return Err("unexpected EOF reading bytes".to_string());
+    }
+    let start = *cursor;
+    *cursor += len;
+    Ok(&data[start..start + len])
 }
 
 #[cfg(test)]
@@ -589,7 +767,8 @@ THEN
             is_within_mission_hours: true,
         };
         let ctx = EvaluationContext::from_request(&req);
-        let proof = ProofBinding::create(&bytecode, &req, &ctx, Decision::Block, "mock-crypto").unwrap();
+        let proof =
+            ProofBinding::create(&bytecode, &req, &ctx, Decision::Block, "mock-crypto").unwrap();
         assert!(proof
             .verify_recompute(&bytecode, &req, &ctx, Decision::Block, "mock-crypto")
             .unwrap());
@@ -666,18 +845,48 @@ THEN
 
         assert_eq!(
             signing_hex,
-            "01010009111111111111111111111111111111111111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222223333333333333333333333333333333333333333333333333333333333333333444444444444444444444444444444444444444444444444444444444444444402002101e7e331964026891ae93f6f0d4b20c19f95cf20d6c6ba87fd73e287b081a46201"
+            "010100090001111111111111111111111111111111111111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222223333333333333333333333333333333333333333333333333333333333333333444444444444444444444444444444444444444444444444444444444444444402002101e7e331964026891ae93f6f0d4b20c19f95cf20d6c6ba87fd73e287b081a46201"
         );
         assert_eq!(
             canonical_hex,
-            "01010009111111111111111111111111111111111111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222223333333333333333333333333333333333333333333333333333333333333333444444444444444444444444444444444444444444444444444444444444444402002101e7e331964026891ae93f6f0d4b20c19f95cf20d6c6ba87fd73e287b081a4620100000040ec3e14a8311ebc1d76c65054b7b011cbf9b10d6796417b9e69bc3cb28fd6aab41228c26d034d52b6690680ea27617a35db24993cd24dd296c3905b1338272d05"
+            "010100090001111111111111111111111111111111111111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222223333333333333333333333333333333333333333333333333333333333333333444444444444444444444444444444444444444444444444444444444444444402002101e7e331964026891ae93f6f0d4b20c19f95cf20d6c6ba87fd73e287b081a4620100000040e22e8f4b3ab834f4db936d865b8ded519e0aac395ca625c154840f37f7f571429e91b91f97652e4d84495d903bce814fde0d84bd6606ce854648bc064d25f106"
         );
     }
 
     #[test]
-    fn test_pack_runtime_version_u16_ignores_patch() {
-        assert_eq!(pack_runtime_version_u16("0.9.4").unwrap(), pack_runtime_version_u16("0.9.99").unwrap());
-        assert_eq!(pack_runtime_version_u16("1.2.3").unwrap(), 0x0102);
+    fn test_proof_envelope_v1_canonical_decode_roundtrip() {
+        let binding = ProofBinding {
+            serialization_version: 1,
+            schema_id: "rsrp.proof.binding.v1".to_string(),
+            runtime_version: "0.9.3".to_string(),
+            crypto_backend_id: "mock-crypto".to_string(),
+            policy_hash: fixed_hash_hex(0xAA),
+            bytecode_hash: fixed_hash_hex(0xBB),
+            input_hash: fixed_hash_hex(0xCC),
+            state_hash: fixed_hash_hex(0xDD),
+            decision: Decision::Allow,
+        };
+        let kp = crypto_core::signature::Ed25519KeyPair::derive_from_secret(
+            b"rsrp-proof-envelope-v1-roundtrip",
+            Some("fixture-ed25519-key".into()),
+        );
+        let pk = kp.verifying_key();
+        let env = ProofEnvelopeV1::sign_ed25519(&binding, "fixture-ed25519-key", &kp).unwrap();
+        let bytes = env.canonical_bytes().unwrap();
+        let decoded = ProofEnvelopeV1::from_canonical_bytes(&bytes).unwrap();
+
+        assert_eq!(decoded.canonical_bytes().unwrap(), bytes);
+        assert_eq!(decoded.decision().unwrap(), Decision::Allow);
+        assert!(decoded.verify_ed25519(&pk).unwrap());
+    }
+
+    #[test]
+    fn test_pack_runtime_version_u32_includes_patch() {
+        assert_ne!(
+            pack_runtime_version_u32("0.9.4").unwrap(),
+            pack_runtime_version_u32("0.9.99").unwrap()
+        );
+        assert_eq!(pack_runtime_version_u32("1.2.3").unwrap(), 0x01020003);
     }
 
     #[cfg(feature = "pq-proof")]
@@ -718,7 +927,8 @@ THEN
         let signer = pqcrypto::hybrid::HybridSigner::new(pqcrypto::DilithiumLevel::Dilithium2);
         let kp = signer.generate_keypair().unwrap();
         let pk = kp.public_key();
-        let envelope = PqProofEnvelope::sign_hybrid(binding, "pq-proof-key-1", &signer, &kp).unwrap();
+        let envelope =
+            PqProofEnvelope::sign_hybrid(binding, "pq-proof-key-1", &signer, &kp).unwrap();
         assert_eq!(envelope.pq_backend_id, signer.backend_id());
         assert!(envelope.verify_hybrid(&pk).unwrap());
     }

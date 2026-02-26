@@ -1,5 +1,5 @@
 //! Immutable Logging - Append-only audit logs with cryptographic proof
-//! 
+//!
 //! This module implements the immutable audit layer as specified in SPEC_IMMUTABLE_LOGGING.md
 //! Features:
 //! - Chained hash verification
@@ -7,11 +7,11 @@
 //! - Daily publication
 //! - TSA timestamps
 
-pub mod log_entry;
 pub mod chain;
+pub mod error;
+pub mod log_entry;
 pub mod merkle_service;
 pub mod publication;
-pub mod error;
 
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -31,20 +31,23 @@ impl ImmutableLog {
             merkle: Arc::new(RwLock::new(merkle_service::MerkleService::new())),
         }
     }
-    
+
     /// Append a new entry
-    pub async fn append(&self, entry: log_entry::LogEntry) -> Result<log_entry::LogEntry, error::LogError> {
+    pub async fn append(
+        &self,
+        entry: log_entry::LogEntry,
+    ) -> Result<log_entry::LogEntry, error::LogError> {
         // Get current chain state
         let mut chain = self.chain.write().await;
         let entry = chain.append(entry).await?;
-        
+
         // Add to merkle tree
         let mut merkle = self.merkle.write().await;
         merkle.add_entry(entry.clone()).await?;
-        
+
         Ok(entry)
     }
-    
+
     /// Verify chain integrity
     pub async fn verify(&self) -> Result<bool, error::LogError> {
         let chain = self.chain.read().await;
@@ -62,7 +65,7 @@ impl ImmutableLog {
         let chain = self.chain.read().await;
         chain.current_hash().to_string()
     }
-    
+
     /// Get current hourly root
     pub async fn get_hourly_root(&self) -> Option<merkle_service::HourlyRoot> {
         let merkle = self.merkle.read().await;
@@ -83,7 +86,7 @@ impl ImmutableLog {
         }
         roots
     }
-    
+
     /// Generate chain proof for an entry
     pub async fn get_chain_proof(&self, entry_id: &str) -> Option<chain::ChainProof> {
         let chain = self.chain.read().await;
@@ -134,24 +137,25 @@ impl Default for LogConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_default_config() {
         let config = LogConfig::default();
         assert_eq!(config.hash_algorithm, "SHA256");
         assert!(config.hourly_publication);
     }
-    
+
     #[tokio::test]
     async fn test_append_entry() {
         let log = ImmutableLog::new();
-        
+
         let entry = log_entry::LogEntry::new(
             log_entry::EventType::AccountQuery,
             "agent-001".to_string(),
             "org-001".to_string(),
-        );
-        
+        )
+        .unwrap();
+
         let result = log.append(entry).await;
         assert!(result.is_ok());
     }
@@ -170,7 +174,8 @@ mod tests {
             log_entry::EventType::AccountQuery,
             "agent-001".to_string(),
             "org-001".to_string(),
-        );
+        )
+        .unwrap();
         log.append(entry).await.expect("append");
 
         let roots = log.hourly_roots_snapshot().await;

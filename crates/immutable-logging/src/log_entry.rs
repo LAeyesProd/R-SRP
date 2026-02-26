@@ -191,7 +191,11 @@ impl LogEntryBuilder {
         let entry_id = format!(
             "le_{}_{}",
             timestamp_unix,
-            uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("unknown")
+            uuid::Uuid::new_v4()
+                .to_string()
+                .split('-')
+                .next()
+                .unwrap_or("unknown")
         );
 
         let mut entry = LogEntry {
@@ -235,32 +239,15 @@ impl LogEntry {
         }
     }
 
-    /// Backward-compatible constructor using default builder values.
-    pub fn new(event_type: EventType, agent_id: String, agent_org: String) -> Self {
-        Self::builder(event_type, agent_id, agent_org)
-            .build()
-            .unwrap_or_else(|_| Self {
-                entry_id: "le_invalid".to_string(),
-                version: "1.0".to_string(),
-                timestamp_unix: 0,
-                timestamp_iso: "1970-01-01T00:00:00+00:00".to_string(),
-                event_type,
-                actor: Actor {
-                    agent_id: "invalid".to_string(),
-                    agent_org: "invalid".to_string(),
-                    mission_id: None,
-                    mission_type: None,
-                },
-                request: None,
-                compliance: None,
-                proof_envelope_v1_b64: None,
-                integrity: Integrity {
-                    content_hash: "0".repeat(64),
-                    previous_entry_hash: String::new(),
-                },
-                decision: Decision::Allow,
-                rule_id: None,
-            })
+    /// Constructor using default builder values.
+    ///
+    /// This function is fail-closed: no synthetic/fallback entry is produced.
+    pub fn new(
+        event_type: EventType,
+        agent_id: String,
+        agent_org: String,
+    ) -> Result<Self, LogError> {
+        Self::builder(event_type, agent_id, agent_org).build()
     }
 
     pub fn entry_id(&self) -> &str {
@@ -302,7 +289,10 @@ impl LogEntry {
         }
     }
 
-    pub(crate) fn commit_with_previous_hash(mut self, previous_hash: &str) -> Result<Self, LogError> {
+    pub(crate) fn commit_with_previous_hash(
+        mut self,
+        previous_hash: &str,
+    ) -> Result<Self, LogError> {
         self.integrity.previous_entry_hash = previous_hash.to_string();
         self.recompute_content_hash()?;
         Ok(self)
@@ -362,8 +352,8 @@ fn sha256_hex(data: &[u8]) -> String {
 }
 
 fn encode_canonical<T: Serialize>(schema_id: &str, payload: &T) -> Result<Vec<u8>, LogError> {
-    let json = serde_json::to_vec(payload)
-        .map_err(|e| LogError::SerializationError(e.to_string()))?;
+    let json =
+        serde_json::to_vec(payload).map_err(|e| LogError::SerializationError(e.to_string()))?;
     let schema_len: u16 = schema_id
         .len()
         .try_into()
@@ -392,7 +382,8 @@ mod tests {
             EventType::AccountQuery,
             "AGENT_001".to_string(),
             "FISCALITE_DGFiP".to_string(),
-        );
+        )
+        .unwrap();
 
         assert!(entry.entry_id().starts_with("le_"));
         assert_eq!(entry.event_type(), EventType::AccountQuery);
@@ -406,6 +397,7 @@ mod tests {
             "AGENT_001".to_string(),
             "GENDARMERIE".to_string(),
         )
+        .unwrap()
         .commit_with_previous_hash("previous_hash_123")
         .unwrap();
 
@@ -419,7 +411,8 @@ mod tests {
             EventType::RuleViolation,
             "AGENT_001".to_string(),
             "DGFiP".to_string(),
-        );
+        )
+        .unwrap();
         assert!(entry.verify_content_hash());
 
         entry.decision = Decision::Block;
@@ -432,7 +425,8 @@ mod tests {
             EventType::DataAccess,
             "AGENT_001".to_string(),
             "ORG".to_string(),
-        );
+        )
+        .unwrap();
         let bytes = entry.canonical_entry_bytes().unwrap();
         assert_eq!(bytes[0], CANONICAL_ENCODING_VERSION);
         let schema_len = u16::from_be_bytes([bytes[1], bytes[2]]) as usize;

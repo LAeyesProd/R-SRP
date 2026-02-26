@@ -478,10 +478,18 @@ It does not change the historical assessment above.
 - `rsrp-proof-engine`: strict `ProofBinding` (bytecode hash, runtime version, backend ID, serialization version)
 - `rsrp-proof-engine`: signed proof envelopes (Ed25519 bootstrap and PQ/hybrid feature-gated envelope)
 - `rsrp-proof-engine`: canonical `ProofEnvelopeV1` (Ed25519 + feature-gated hybrid attestation APIs)
+- `rsrp-proof-engine`: `ProofEnvelopeV1.runtime_version` migrated to packed `u32` (`major.minor.patch`)
+- `rsrp-proof-engine`: `ProofBinding` canonical payload moved to deterministic binary field encoding (no JSON payload serialization)
 - `rsrp-proof-engine`: explicit VM instructions with `EmitDecision` and precompiled match programs
 - `rsrp-proof-engine`: compiled action execution moved to explicit `ActionVm` instruction program
 - `rsrp-proof-engine`: `ProofBinding` now carries explicit `policy_hash`
 - `rsrp-pqcrypto`: hybrid verification now supports public-key-only verification (`HybridPublicKey`)
+- `rsrp-pqcrypto`: hybrid KEM classical branch moved to real X25519 ECDH (ephemeral public key ciphertext)
+- `rsrp-pqcrypto`: hybrid KEM now enforces classical/quantum binding tag validation; tampered components fail decapsulation
+- `rsrp-policy-dsl`: rule signing path now uses coherent Ed25519 in-memory signer/verification
+- `rsrp-policy-dsl`: compiler implements `IN` and `BETWEEN` operators into deterministic bytecode
+- `rsrp-security-core`: RSA-PSS stubs replaced by real RSA-PSS-SHA256 sign/verify (DER key inputs)
+- `rsrp-immutable-ledger`: `LogEntry::new(...)` is now fail-closed (`Result`) with no synthetic fallback entry generation
 
 ### Still pending / not production-complete
 

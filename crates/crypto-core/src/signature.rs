@@ -1,18 +1,25 @@
 //! Signature primitives - Ed25519, RSA-PSS, ECDSA
 
-use crate::{SignatureAlgorithm, Result, CryptoError, KeyMetadata};
-use ed25519_dalek::{Signer, Verifier, SigningKey, VerifyingKey, Signature as Ed25519Signature};
+use crate::{CryptoError, KeyMetadata, Result, SignatureAlgorithm};
+use ed25519_dalek::{Signature as Ed25519Signature, Signer, SigningKey, VerifyingKey};
 use rand::{rngs::OsRng, rngs::StdRng, SeedableRng};
+use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey};
+use rsa::pss::{
+    Signature as RsaPssSignature, SigningKey as RsaPssSigningKey,
+    VerifyingKey as RsaPssVerifyingKey,
+};
+use rsa::{RsaPrivateKey, RsaPublicKey};
 use sha2::Digest as _;
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use signature::{RandomizedSigner, SignatureEncoding, Verifier as SignatureVerifier};
 use thiserror::Error;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// Error type for key generation
 #[derive(Error, Debug)]
 pub enum KeyGenerationError {
     #[error("Failed to gather entropy: {0}")]
     EntropyError(String),
-    
+
     #[error("Key generation failed: {0}")]
     GenerationError(String),
 }
@@ -82,7 +89,7 @@ impl Ed25519KeyPair {
     }
 
     /// Generate new Ed25519 key pair with FIPS-compliant entropy
-    /// 
+    ///
     /// In FIPS mode (RUST_FIPS=1), this requires OS-level entropy.
     /// In non-FIPS mode, falls back to deterministic RNG if OsRng fails.
     ///
@@ -91,7 +98,7 @@ impl Ed25519KeyPair {
         let fips_mode = FipsMode::default();
         Self::generate_with_mode(fips_mode)
     }
-    
+
     /// Generate key pair with specific FIPS mode
     pub fn generate_with_mode(
         fips_mode: FipsMode,
@@ -104,15 +111,19 @@ impl Ed25519KeyPair {
                 match fips_mode {
                     FipsMode::Strict => {
                         // In strict mode, return error - don't panic
-                        return Err(KeyGenerationError::EntropyError(
-                            format!("FIPS strict mode: OS entropy unavailable: {}", e)
-                        ));
-                    },
+                        return Err(KeyGenerationError::EntropyError(format!(
+                            "FIPS strict mode: OS entropy unavailable: {}",
+                            e
+                        )));
+                    }
                     FipsMode::Enabled => {
                         // Log warning but try fallback
-                        eprintln!("WARNING: OS entropy unavailable, using fallback RNG (non-FIPS): {}", e);
+                        eprintln!(
+                            "WARNING: OS entropy unavailable, using fallback RNG (non-FIPS): {}",
+                            e
+                        );
                         Self::generate_fallback()
-                    },
+                    }
                     FipsMode::Disabled => {
                         // Use fallback silently
                         Self::generate_fallback()
@@ -121,7 +132,7 @@ impl Ed25519KeyPair {
             }
         };
         let verifying_key = signing_key.verifying_key();
-        
+
         Ok(Ed25519KeyPair {
             signing_key,
             verifying_key,
@@ -134,13 +145,13 @@ impl Ed25519KeyPair {
             },
         })
     }
-    
+
     /// Generate key using OS entropy (FIPS-compliant)
     fn generate_with_os_rng() -> std::result::Result<SigningKey, KeyGenerationError> {
         let mut os_rng = OsRng;
         Ok(SigningKey::generate(&mut os_rng))
     }
-    
+
     /// Fallback RNG for when OS entropy is unavailable
     /// WARNING: This is NOT cryptographically secure for production!
     /// Use only as last resort or in development.
@@ -153,39 +164,41 @@ impl Ed25519KeyPair {
         let mut rng = StdRng::from_entropy();
         SigningKey::generate(&mut rng)
     }
-    
+
     /// Generate key with explicit HSM (Hardware Security Module)
     /// Returns error if HSM is not available
     #[allow(dead_code)]
     pub fn generate_with_hsm(_slot: u32) -> Result<Self> {
         // HSM integration would go here
         // For now, return error indicating HSM not implemented
-        Err(CryptoError::KeyError("HSM integration not implemented".to_string()))
+        Err(CryptoError::KeyError(
+            "HSM integration not implemented".to_string(),
+        ))
     }
-    
+
     /// Sign data
     pub fn sign(&self, data: &[u8]) -> Vec<u8> {
         let signature = self.signing_key.sign(data);
         signature.to_bytes().to_vec()
     }
-    
+
     /// Verify signature
     pub fn verify(&self, data: &[u8], signature: &[u8]) -> bool {
         if signature.len() != 64 {
             return false;
         }
-        
+
         let sig_array: [u8; 64] = signature.try_into().unwrap();
         let ed25519_sig = Ed25519Signature::from_bytes(&sig_array);
-        
+
         self.verifying_key.verify(data, &ed25519_sig).is_ok()
     }
-    
+
     /// Get verifying key (public)
     pub fn verifying_key(&self) -> Vec<u8> {
         self.verifying_key.to_bytes().to_vec()
     }
-    
+
     /// Get metadata
     pub fn metadata(&self) -> &KeyMetadata {
         &self.metadata
@@ -203,19 +216,55 @@ pub struct RsaKeyPair {
 impl RsaKeyPair {
     /// Generate new RSA-PSS 4096 key pair
     #[allow(dead_code)]
-    pub fn generate() -> Self {
-        // In production, use rsa::RsaPrivateKey::new
-        RsaKeyPair {
-            key_id: format!("rsa-pss-4096-{}", uuid::Uuid::new_v4()),
-            public_key: vec![],
-            private_key: vec![],
-        }
+    pub fn generate() -> Result<Self> {
+        Self::generate_with_bits(4096)
     }
-    
+
+    /// Generate RSA-PSS key pair with explicit key size.
+    #[allow(dead_code)]
+    pub fn generate_with_bits(bits: usize) -> Result<Self> {
+        if bits < 2048 {
+            return Err(CryptoError::KeyError(
+                "RSA key size must be >= 2048 bits".to_string(),
+            ));
+        }
+        let mut rng = OsRng;
+        let private = RsaPrivateKey::new(&mut rng, bits)
+            .map_err(|e| CryptoError::KeyError(format!("RSA key generation failed: {e}")))?;
+        let public = RsaPublicKey::from(&private);
+        let private_key = private
+            .to_pkcs8_der()
+            .map_err(|e| {
+                CryptoError::KeyError(format!("RSA private key DER encoding failed: {e}"))
+            })?
+            .as_bytes()
+            .to_vec();
+        let public_key = public
+            .to_public_key_der()
+            .map_err(|e| CryptoError::KeyError(format!("RSA public key DER encoding failed: {e}")))?
+            .as_bytes()
+            .to_vec();
+        Ok(RsaKeyPair {
+            key_id: format!("rsa-pss-{bits}-{}", uuid::Uuid::new_v4()),
+            public_key,
+            private_key,
+        })
+    }
+
     /// Get key ID
     #[allow(dead_code)]
     pub fn key_id(&self) -> &str {
         &self.key_id
+    }
+
+    #[allow(dead_code)]
+    pub fn public_key_der(&self) -> &[u8] {
+        &self.public_key
+    }
+
+    #[allow(dead_code)]
+    pub fn private_key_der(&self) -> &[u8] {
+        &self.private_key
     }
 }
 
@@ -225,70 +274,90 @@ pub fn sign(data: &[u8], key: &Ed25519KeyPair) -> Result<Vec<u8>> {
 }
 
 /// Verify signature with specified algorithm
-pub fn verify(data: &[u8], signature: &[u8], public_key: &[u8], algorithm: SignatureAlgorithm) -> Result<bool> {
+pub fn verify(
+    data: &[u8],
+    signature: &[u8],
+    public_key: &[u8],
+    algorithm: SignatureAlgorithm,
+) -> Result<bool> {
     match algorithm {
+        SignatureAlgorithm::RsaPss2048 | SignatureAlgorithm::RsaPss4096 => {
+            verify_rsa_pss(data, signature, public_key)
+        }
         SignatureAlgorithm::Ed25519 => {
             // Reconstruct verifying key and verify
             if public_key.len() != 32 {
                 return Err(CryptoError::InvalidKey);
             }
-            
+
             let mut key_bytes = [0u8; 32];
             key_bytes.copy_from_slice(public_key);
-            let verifying_key = VerifyingKey::from_bytes(&key_bytes)
-                .map_err(|_| CryptoError::InvalidKey)?;
-            
+            let verifying_key =
+                VerifyingKey::from_bytes(&key_bytes).map_err(|_| CryptoError::InvalidKey)?;
+
             if signature.len() != 64 {
                 return Ok(false);
             }
-            
+
             let mut sig_bytes = [0u8; 64];
             sig_bytes.copy_from_slice(signature);
             let ed25519_sig = Ed25519Signature::from_bytes(&sig_bytes);
-            
+
             Ok(verifying_key.verify(data, &ed25519_sig).is_ok())
         }
-        _ => Err(CryptoError::SignatureError("Algorithm not implemented".to_string())),
+        _ => Err(CryptoError::SignatureError(
+            "Algorithm not implemented".to_string(),
+        )),
     }
 }
 
-/// Sign with RSA-PSS (placeholder)
+/// Sign with RSA-PSS-SHA256 using PKCS#8 DER private key bytes.
 #[allow(dead_code)]
-pub fn sign_rsa_pss(_data: &[u8], _private_key: &[u8]) -> Result<Vec<u8>> {
-    // Placeholder - full implementation would use rsa crate
-    Err(CryptoError::SignatureError("RSA-PSS not implemented".to_string()))
+pub fn sign_rsa_pss(data: &[u8], private_key: &[u8]) -> Result<Vec<u8>> {
+    let private = RsaPrivateKey::from_pkcs8_der(private_key).map_err(|_| {
+        CryptoError::KeyError("Invalid RSA private key (expected PKCS#8 DER)".to_string())
+    })?;
+    let signer = RsaPssSigningKey::<sha2::Sha256>::new(private);
+    let mut rng = OsRng;
+    let sig = signer.sign_with_rng(&mut rng, data);
+    Ok(sig.to_vec())
 }
 
-/// Verify RSA-PSS signature (placeholder)
+/// Verify RSA-PSS-SHA256 using SubjectPublicKeyInfo DER public key bytes.
 #[allow(dead_code)]
-pub fn verify_rsa_pss(_data: &[u8], _signature: &[u8], _public_key: &[u8]) -> Result<bool> {
-    // Placeholder - full implementation would use rsa crate
-    Err(CryptoError::SignatureError("RSA-PSS not implemented".to_string()))
+pub fn verify_rsa_pss(data: &[u8], signature: &[u8], public_key: &[u8]) -> Result<bool> {
+    let public = RsaPublicKey::from_public_key_der(public_key).map_err(|_| {
+        CryptoError::KeyError("Invalid RSA public key (expected SPKI DER)".to_string())
+    })?;
+    let verifier = RsaPssVerifyingKey::<sha2::Sha256>::new(public);
+    let sig = RsaPssSignature::try_from(signature)
+        .map_err(|_| CryptoError::SignatureError("Invalid RSA-PSS signature bytes".to_string()))?;
+    Ok(verifier.verify(data, &sig).is_ok())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_ed25519_sign_verify() {
         let key_pair = Ed25519KeyPair::generate().unwrap();
-        
+
         let data = b"Test message for signing";
         let signature = key_pair.sign(data);
-        
+
         assert!(key_pair.verify(data, &signature));
         assert!(!key_pair.verify(b"Wrong data", &signature));
     }
-    
+
     #[test]
     fn test_verify_with_public_key() {
         let key_pair = Ed25519KeyPair::generate().unwrap();
-        
+
         let data = b"Test message";
         let signature = key_pair.sign(data);
         let public_key = key_pair.verifying_key();
-        
+
         let result = verify(data, &signature, &public_key, SignatureAlgorithm::Ed25519).unwrap();
         assert!(result);
     }
@@ -305,5 +374,14 @@ mod tests {
         let msg = b"publication payload";
         let sig = k1.sign(msg);
         assert!(k2.verify(msg, &sig));
+    }
+
+    #[test]
+    fn test_rsa_pss_sign_verify_roundtrip() {
+        let keypair = RsaKeyPair::generate_with_bits(2048).unwrap();
+        let msg = b"rsa-pss-message";
+        let sig = sign_rsa_pss(msg, keypair.private_key_der()).unwrap();
+        assert!(verify_rsa_pss(msg, &sig, keypair.public_key_der()).unwrap());
+        assert!(!verify_rsa_pss(b"tampered", &sig, keypair.public_key_der()).unwrap());
     }
 }

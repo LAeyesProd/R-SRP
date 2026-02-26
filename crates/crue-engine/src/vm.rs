@@ -349,7 +349,9 @@ fn decode_opcode(byte: u8) -> Result<Opcode, EngineError> {
 
 fn read_u16(code: &[u8], pc: &mut usize) -> Result<u16, EngineError> {
     if *pc + 2 > code.len() {
-        return Err(EngineError::EvaluationError("Truncated u16 operand".to_string()));
+        return Err(EngineError::EvaluationError(
+            "Truncated u16 operand".to_string(),
+        ));
     }
     let v = u16::from_be_bytes([code[*pc], code[*pc + 1]]);
     *pc += 2;
@@ -358,7 +360,9 @@ fn read_u16(code: &[u8], pc: &mut usize) -> Result<u16, EngineError> {
 
 fn read_u32(code: &[u8], pc: &mut usize) -> Result<u32, EngineError> {
     if *pc + 4 > code.len() {
-        return Err(EngineError::EvaluationError("Truncated u32 operand".to_string()));
+        return Err(EngineError::EvaluationError(
+            "Truncated u32 operand".to_string(),
+        ));
     }
     let v = u32::from_be_bytes([code[*pc], code[*pc + 1], code[*pc + 2], code[*pc + 3]]);
     *pc += 4;
@@ -378,12 +382,15 @@ fn field_to_vm(v: &FieldValue) -> Result<VmValue, EngineError> {
         FieldValue::Number(n) => Ok(VmValue::Number(*n)),
         FieldValue::String(s) => Ok(VmValue::String(s.clone())),
         FieldValue::Boolean(b) => Ok(VmValue::Bool(*b)),
-        FieldValue::Float(_) => Err(EngineError::TypeMismatch("float field unsupported in VM".into())),
+        FieldValue::Float(_) => Err(EngineError::TypeMismatch(
+            "float field unsupported in VM".into(),
+        )),
     }
 }
 
 fn pop(stack: &mut Vec<VmValue>) -> Result<VmValue, EngineError> {
-    stack.pop()
+    stack
+        .pop()
         .ok_or_else(|| EngineError::EvaluationError("VM stack underflow".to_string()))
 }
 
@@ -428,7 +435,11 @@ fn binary_eq(stack: &mut Vec<VmValue>, eq: bool) -> Result<(), EngineError> {
         (VmValue::Bool(a), VmValue::Bool(b)) => a == b,
         (VmValue::Number(a), VmValue::Number(b)) => a == b,
         (VmValue::String(a), VmValue::String(b)) => a == b,
-        _ => return Err(EngineError::TypeMismatch("Incompatible equality operands".to_string())),
+        _ => {
+            return Err(EngineError::TypeMismatch(
+                "Incompatible equality operands".to_string(),
+            ))
+        }
     };
     stack.push(VmValue::Bool(if eq { result } else { !result }));
     Ok(())
@@ -439,6 +450,7 @@ mod tests {
     use super::*;
     use crate::ir::ActionInstruction;
     use crate::EvaluationRequest;
+    use crue_dsl::ast::{ActionNode, Expression, MetadataNode, RuleAst, Value};
 
     #[test]
     fn test_vm_eval_compiled_rule() {
@@ -589,5 +601,109 @@ THEN
             result.message.as_deref(),
             Some("Approval required within 15 minutes")
         );
+    }
+
+    #[test]
+    fn test_vm_eval_in_operator() {
+        let ast = RuleAst {
+            id: "CRUE_IN_VM".to_string(),
+            version: "1.0.0".to_string(),
+            signed: false,
+            when_clause: Expression::In(
+                Box::new(Expression::field("request.export_format")),
+                vec![
+                    Value::String("PDF".to_string()),
+                    Value::String("CSV".to_string()),
+                ],
+            ),
+            then_clause: vec![ActionNode::Log],
+            metadata: MetadataNode {
+                name: "IN".to_string(),
+                description: "IN".to_string(),
+                severity: "LOW".to_string(),
+                category: "TEST".to_string(),
+                author: "system".to_string(),
+                created_at: "2026-01-01".to_string(),
+                validated_by: None,
+            },
+        };
+        let bytecode = crue_dsl::compiler::Compiler::compile(&ast).unwrap();
+
+        let mut req = EvaluationRequest {
+            request_id: "req".into(),
+            agent_id: "a".into(),
+            agent_org: "o".into(),
+            agent_level: "standard".into(),
+            mission_id: None,
+            mission_type: None,
+            query_type: None,
+            justification: None,
+            export_format: Some("PDF".into()),
+            result_limit: None,
+            requests_last_hour: 0,
+            requests_last_24h: 0,
+            results_last_query: 0,
+            account_department: None,
+            allowed_departments: vec![],
+            request_hour: 12,
+            is_within_mission_hours: true,
+        };
+        let ctx = EvaluationContext::from_request(&req);
+        assert!(BytecodeVm::eval(&bytecode, &ctx).unwrap());
+
+        req.export_format = Some("XML".into());
+        let ctx = EvaluationContext::from_request(&req);
+        assert!(!BytecodeVm::eval(&bytecode, &ctx).unwrap());
+    }
+
+    #[test]
+    fn test_vm_eval_between_operator() {
+        let ast = RuleAst {
+            id: "CRUE_BETWEEN_VM".to_string(),
+            version: "1.0.0".to_string(),
+            signed: false,
+            when_clause: Expression::Between(
+                Box::new(Expression::field("context.request_hour")),
+                Box::new(Expression::number(8)),
+                Box::new(Expression::number(18)),
+            ),
+            then_clause: vec![ActionNode::Log],
+            metadata: MetadataNode {
+                name: "BETWEEN".to_string(),
+                description: "BETWEEN".to_string(),
+                severity: "LOW".to_string(),
+                category: "TEST".to_string(),
+                author: "system".to_string(),
+                created_at: "2026-01-01".to_string(),
+                validated_by: None,
+            },
+        };
+        let bytecode = crue_dsl::compiler::Compiler::compile(&ast).unwrap();
+
+        let mut req = EvaluationRequest {
+            request_id: "req".into(),
+            agent_id: "a".into(),
+            agent_org: "o".into(),
+            agent_level: "standard".into(),
+            mission_id: None,
+            mission_type: None,
+            query_type: None,
+            justification: None,
+            export_format: None,
+            result_limit: None,
+            requests_last_hour: 0,
+            requests_last_24h: 0,
+            results_last_query: 0,
+            account_department: None,
+            allowed_departments: vec![],
+            request_hour: 9,
+            is_within_mission_hours: true,
+        };
+        let ctx = EvaluationContext::from_request(&req);
+        assert!(BytecodeVm::eval(&bytecode, &ctx).unwrap());
+
+        req.request_hour = 22;
+        let ctx = EvaluationContext::from_request(&req);
+        assert!(!BytecodeVm::eval(&bytecode, &ctx).unwrap());
     }
 }

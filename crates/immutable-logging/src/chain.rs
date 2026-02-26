@@ -197,7 +197,8 @@ mod tests {
             EventType::AccountQuery,
             "AGENT_001".to_string(),
             "DGFiP".to_string(),
-        );
+        )
+        .unwrap();
 
         let result = chain.append(entry).await;
         assert!(result.is_ok());
@@ -208,19 +209,25 @@ mod tests {
     async fn test_chain_proof_detects_tampering() {
         let mut chain = LogChain::new();
         let e1 = chain
-            .append(LogEntry::new(
-                EventType::AuthSuccess,
-                "AGENT_001".to_string(),
-                "DGFiP".to_string(),
-            ))
+            .append(
+                LogEntry::new(
+                    EventType::AuthSuccess,
+                    "AGENT_001".to_string(),
+                    "DGFiP".to_string(),
+                )
+                .unwrap(),
+            )
             .await
             .unwrap();
         let _e2 = chain
-            .append(LogEntry::new(
-                EventType::DataAccess,
-                "AGENT_002".to_string(),
-                "DGFiP".to_string(),
-            ))
+            .append(
+                LogEntry::new(
+                    EventType::DataAccess,
+                    "AGENT_002".to_string(),
+                    "DGFiP".to_string(),
+                )
+                .unwrap(),
+            )
             .await
             .unwrap();
 

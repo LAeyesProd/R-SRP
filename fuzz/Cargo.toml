@@ -1,0 +1,47 @@
+[package]
+name = "rsrp-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+serde_json = "1.0"
+
+[dependencies.crue_dsl]
+package = "rsrp-policy-dsl"
+path = "../crates/crue-dsl"
+
+[dependencies.crue_engine]
+package = "rsrp-proof-engine"
+path = "../crates/crue-engine"
+
+[dependencies.immutable_logging]
+package = "rsrp-immutable-ledger"
+path = "../crates/immutable-logging"
+
+[[bin]]
+name = "dsl_parser"
+path = "fuzz_targets/dsl_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "proof_envelope_decode"
+path = "fuzz_targets/proof_envelope_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "log_entry_deserialize"
+path = "fuzz_targets/log_entry_deserialize.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

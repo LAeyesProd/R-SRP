@@ -1,5 +1,5 @@
 //! Dilithium Post-Quantum Signature Implementation
-//! 
+//!
 //! Implements ML-DSA (Module-Lattice Digital Signature Algorithm)
 //! as specified in NIST FIPS 203.
 
@@ -31,7 +31,7 @@ impl DilithiumLevel {
             DilithiumLevel::Dilithium5 => "ML-DSA-87",
         }
     }
-    
+
     /// Get public key size in bytes
     pub fn public_key_size(&self) -> usize {
         match self {
@@ -40,7 +40,7 @@ impl DilithiumLevel {
             DilithiumLevel::Dilithium5 => 1952,
         }
     }
-    
+
     /// Get secret key size in bytes
     pub fn secret_key_size(&self) -> usize {
         match self {
@@ -49,7 +49,7 @@ impl DilithiumLevel {
             DilithiumLevel::Dilithium5 => 4864,
         }
     }
-    
+
     /// Get signature size in bytes
     pub fn signature_size(&self) -> usize {
         match self {
@@ -73,14 +73,14 @@ pub struct DilithiumPublicKey {
 }
 
 /// Dilithium secret key
-#[derive(Clone, Serialize, Deserialize, Zeroize)]
+#[derive(Zeroize)]
 #[zeroize(drop)]
 pub struct DilithiumSecretKey {
     /// Algorithm level
     #[zeroize(skip)]
     pub level: DilithiumLevel,
     /// Secret key bytes
-    pub key: Vec<u8>,
+    key: Vec<u8>,
 }
 
 /// Dilithium signature
@@ -103,8 +103,15 @@ pub struct Dilithium {
 /// Signature backend provider abstraction (mock or real implementation).
 pub trait SignatureProvider {
     fn backend_id(&self) -> &'static str;
-    fn generate_keypair(&self, level: DilithiumLevel) -> PqcResult<(DilithiumPublicKey, DilithiumSecretKey)>;
-    fn sign(&self, secret_key: &DilithiumSecretKey, message: &[u8]) -> PqcResult<DilithiumSignature>;
+    fn generate_keypair(
+        &self,
+        level: DilithiumLevel,
+    ) -> PqcResult<(DilithiumPublicKey, DilithiumSecretKey)>;
+    fn sign(
+        &self,
+        secret_key: &DilithiumSecretKey,
+        message: &[u8],
+    ) -> PqcResult<DilithiumSignature>;
     fn verify(
         &self,
         public_key: &DilithiumPublicKey,
@@ -135,22 +142,31 @@ impl Dilithium {
     pub fn backend_id(&self) -> &'static str {
         active_provider().backend_id()
     }
-    
+
     /// Generate new key pair
     pub fn generate_keypair(&self) -> PqcResult<(DilithiumPublicKey, DilithiumSecretKey)> {
         active_provider().generate_keypair(self.level)
     }
-    
+
     /// Sign a message
-    pub fn sign(&self, secret_key: &DilithiumSecretKey, message: &[u8]) -> PqcResult<DilithiumSignature> {
+    pub fn sign(
+        &self,
+        secret_key: &DilithiumSecretKey,
+        message: &[u8],
+    ) -> PqcResult<DilithiumSignature> {
         if secret_key.level != self.level {
             return Err(PqcError::InvalidKey("Key level mismatch".into()));
         }
         active_provider().sign(secret_key, message)
     }
-    
+
     /// Verify a signature
-    pub fn verify(&self, public_key: &DilithiumPublicKey, message: &[u8], signature: &DilithiumSignature) -> PqcResult<bool> {
+    pub fn verify(
+        &self,
+        public_key: &DilithiumPublicKey,
+        message: &[u8],
+        signature: &DilithiumSignature,
+    ) -> PqcResult<bool> {
         if public_key.level != self.level || signature.level != self.level {
             return Err(PqcError::InvalidKey("Level mismatch".into()));
         }
@@ -191,19 +207,32 @@ impl SignatureProvider for MockProvider {
         "mock-crypto"
     }
 
-    fn generate_keypair(&self, level: DilithiumLevel) -> PqcResult<(DilithiumPublicKey, DilithiumSecretKey)> {
+    fn generate_keypair(
+        &self,
+        level: DilithiumLevel,
+    ) -> PqcResult<(DilithiumPublicKey, DilithiumSecretKey)> {
         let mut rng = rand::thread_rng();
         let mut secret_key = vec![0u8; level.secret_key_size()];
         rand::RngCore::fill_bytes(&mut rng, &mut secret_key);
         let public_key = mock_public_from_secret(level, &secret_key);
 
         Ok((
-            DilithiumPublicKey { level, key: public_key },
-            DilithiumSecretKey { level, key: secret_key },
+            DilithiumPublicKey {
+                level,
+                key: public_key,
+            },
+            DilithiumSecretKey {
+                level,
+                key: secret_key,
+            },
         ))
     }
 
-    fn sign(&self, secret_key: &DilithiumSecretKey, message: &[u8]) -> PqcResult<DilithiumSignature> {
+    fn sign(
+        &self,
+        secret_key: &DilithiumSecretKey,
+        message: &[u8],
+    ) -> PqcResult<DilithiumSignature> {
         let public_key = mock_public_from_secret(secret_key.level, &secret_key.key);
         let signature = mock_signature_bytes(secret_key.level, &public_key, message);
         Ok(DilithiumSignature {
@@ -220,7 +249,9 @@ impl SignatureProvider for MockProvider {
     ) -> PqcResult<bool> {
         let expected_len = public_key.level.signature_size();
         if signature.signature.len() != expected_len {
-            return Err(PqcError::InvalidSignature("Invalid signature length".into()));
+            return Err(PqcError::InvalidSignature(
+                "Invalid signature length".into(),
+            ));
         }
         let expected = mock_signature_bytes(public_key.level, &public_key.key, message);
         Ok(signature.signature == expected)
@@ -233,7 +264,10 @@ impl SignatureProvider for OqsProvider {
         "oqs"
     }
 
-    fn generate_keypair(&self, _level: DilithiumLevel) -> PqcResult<(DilithiumPublicKey, DilithiumSecretKey)> {
+    fn generate_keypair(
+        &self,
+        _level: DilithiumLevel,
+    ) -> PqcResult<(DilithiumPublicKey, DilithiumSecretKey)> {
         let level = _level;
         oqs::init();
         let sig = oqs_sig_for_level(level)?;
@@ -242,18 +276,30 @@ impl SignatureProvider for OqsProvider {
             .map_err(|e| PqcError::KeyGenerationFailed(e.to_string()))?;
         let public_key = pk.into_vec();
         let secret_key = sk.into_vec();
-        if public_key.len() != level.public_key_size() || secret_key.len() != level.secret_key_size() {
+        if public_key.len() != level.public_key_size()
+            || secret_key.len() != level.secret_key_size()
+        {
             return Err(PqcError::KeyGenerationFailed(
                 "OQS key sizes do not match expected ML-DSA sizes".into(),
             ));
         }
         Ok((
-            DilithiumPublicKey { level, key: public_key },
-            DilithiumSecretKey { level, key: secret_key },
+            DilithiumPublicKey {
+                level,
+                key: public_key,
+            },
+            DilithiumSecretKey {
+                level,
+                key: secret_key,
+            },
         ))
     }
 
-    fn sign(&self, secret_key: &DilithiumSecretKey, message: &[u8]) -> PqcResult<DilithiumSignature> {
+    fn sign(
+        &self,
+        secret_key: &DilithiumSecretKey,
+        message: &[u8],
+    ) -> PqcResult<DilithiumSignature> {
         oqs::init();
         let sig = oqs_sig_for_level(secret_key.level)?;
         let sk = sig
@@ -299,7 +345,12 @@ fn oqs_sig_for_level(level: DilithiumLevel) -> PqcResult<sig::Sig> {
 }
 
 fn mock_public_from_secret(level: DilithiumLevel, secret: &[u8]) -> Vec<u8> {
-    expand_hash(level, b"rsrp-mock-dilithium-public", &[secret], level.public_key_size())
+    expand_hash(
+        level,
+        b"rsrp-mock-dilithium-public",
+        &[secret],
+        level.public_key_size(),
+    )
 }
 
 fn mock_signature_bytes(level: DilithiumLevel, public_key: &[u8], message: &[u8]) -> Vec<u8> {
@@ -334,7 +385,7 @@ fn expand_hash(level: DilithiumLevel, domain: &[u8], parts: &[&[u8]], out_len: u
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_dilithium_key_sizes() {
         let dilithium2 = Dilithium::new(DilithiumLevel::Dilithium2);
@@ -342,15 +393,15 @@ mod tests {
         assert_eq!(dilithium2.level.secret_key_size(), 2528);
         assert_eq!(dilithium2.level.signature_size(), 2420);
     }
-    
+
     #[test]
     fn test_dilithium_sign_verify() {
         let dilithium = Dilithium::new(DilithiumLevel::Dilithium2);
         let (public_key, secret_key) = dilithium.generate_keypair().unwrap();
-        
+
         let message = b"Test message for R-SRP Ultra";
         let signature = dilithium.sign(&secret_key, message).unwrap();
-        
+
         let result = dilithium.verify(&public_key, message, &signature);
         assert!(result.unwrap());
     }

@@ -17,7 +17,7 @@ type vector struct {
 	CanonicalBytesLen          int    `json:"canonical_bytes_len"`
 	CanonicalBytesHex          string `json:"canonical_bytes_hex"`
 	CanonicalBytesSHA256Hex    string `json:"canonical_bytes_sha256_hex"`
-	RuntimeVersionPackedU16Hex string `json:"runtime_version_packed_u16_be_hex"`
+	RuntimeVersionPackedU32Hex string `json:"runtime_version_packed_u32_be_hex"`
 	DecisionCode               int    `json:"decision_code"`
 }
 
@@ -65,10 +65,10 @@ func verifyVector(v vector) {
 		fail("%s: signature len suffix mismatch", v.ID)
 	}
 
-	if hex.EncodeToString(signing[2:4]) != v.RuntimeVersionPackedU16Hex {
+	if hex.EncodeToString(signing[2:6]) != v.RuntimeVersionPackedU32Hex {
 		fail("%s: runtime pack mismatch", v.ID)
 	}
-	if int(signing[132]) != v.DecisionCode {
+	if int(signing[134]) != v.DecisionCode {
 		fail("%s: decision code mismatch", v.ID)
 	}
 

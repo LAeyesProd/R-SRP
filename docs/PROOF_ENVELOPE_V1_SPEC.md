@@ -22,7 +22,7 @@ Conceptual structure:
 struct ProofEnvelopeV1 {
     version: u8,
     encoding_version: u8,
-    runtime_version: u16,
+    runtime_version: u32,
     policy_hash: [u8; 32],
     bytecode_hash: [u8; 32],
     input_hash: [u8; 32],
@@ -36,8 +36,8 @@ struct ProofEnvelopeV1 {
 
 - `version`: schema major version (`1`)
 - `encoding_version`: canonical binary encoding revision (`1`)
-- `runtime_version`: packed runtime semver `(major << 8) | minor`
-  - example: `0.9.1` -> `0x0009`
+- `runtime_version`: packed runtime semver `(major << 24) | (minor << 16) | patch`
+  - example: `0.9.1` -> `0x00090001`
 - `policy_hash`: SHA-256 of canonical serialized policy representation
   - current engine compiled path uses canonical serialized AST hash
 - `bytecode_hash`: SHA-256 of canonical serialized compiled bytecode (including action bytecode)
@@ -104,7 +104,7 @@ Layout (in order):
 
 1. `version` (`u8`)
 2. `encoding_version` (`u8`)
-3. `runtime_version` (`u16`)
+3. `runtime_version` (`u32`)
 4. `policy_hash` (`[u8; 32]`)
 5. `bytecode_hash` (`[u8; 32]`)
 6. `input_hash` (`[u8; 32]`)
@@ -156,7 +156,7 @@ Implemented in `rsrp-proof-engine`:
 
 - parser coverage in `rsrp-policy-dsl` still limits some `THEN` syntactic variants
 - signature metadata currently hashes signer/backend string IDs rather than embedding a full certificate/KMS identity structure
-- runtime version packs only `major.minor` (patch omitted)
+- runtime version is packed in `u32`; build metadata/pre-release tags are not encoded in v1
 
 ## 12. Test Vector (Ed25519, Canonical V1)
 
@@ -167,7 +167,7 @@ Deterministic fixture (implemented in `rsrp-proof-engine` unit tests):
   - `bytecode_hash = 0x22 * 32`
   - `input_hash = 0x33 * 32`
   - `state_hash = 0x44 * 32`
-- `runtime_version = "0.9.1"` (packed to `0x0009`)
+- `runtime_version = "0.9.1"` (packed to `0x00090001`)
 - `decision_code = BLOCK (2)`
 - signer key: `Ed25519KeyPair::derive_from_secret("rsrp-proof-envelope-v1-ed25519-test-vector", "fixture-ed25519-key")`
 
@@ -178,11 +178,11 @@ Machine-readable fixture export:
 Canonical `signing_bytes` hex:
 
 ```text
-01010009111111111111111111111111111111111111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222223333333333333333333333333333333333333333333333333333333333333333444444444444444444444444444444444444444444444444444444444444444402002101e7e331964026891ae93f6f0d4b20c19f95cf20d6c6ba87fd73e287b081a46201
+010100090001111111111111111111111111111111111111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222223333333333333333333333333333333333333333333333333333333333333333444444444444444444444444444444444444444444444444444444444444444402002101e7e331964026891ae93f6f0d4b20c19f95cf20d6c6ba87fd73e287b081a46201
 ```
 
 Canonical `canonical_bytes` hex (includes signature length + signature bytes):
 
 ```text
-01010009111111111111111111111111111111111111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222223333333333333333333333333333333333333333333333333333333333333333444444444444444444444444444444444444444444444444444444444444444402002101e7e331964026891ae93f6f0d4b20c19f95cf20d6c6ba87fd73e287b081a4620100000040ec3e14a8311ebc1d76c65054b7b011cbf9b10d6796417b9e69bc3cb28fd6aab41228c26d034d52b6690680ea27617a35db24993cd24dd296c3905b1338272d05
+010100090001111111111111111111111111111111111111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222223333333333333333333333333333333333333333333333333333333333333333444444444444444444444444444444444444444444444444444444444444444402002101e7e331964026891ae93f6f0d4b20c19f95cf20d6c6ba87fd73e287b081a4620100000040e22e8f4b3ab834f4db936d865b8ded519e0aac395ca625c154840f37f7f571429e91b91f97652e4d84495d903bce814fde0d84bd6606ce854648bc064d25f106
 ```

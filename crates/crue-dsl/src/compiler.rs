@@ -1,10 +1,10 @@
 //! CRUE DSL Compiler
-//! 
+//!
 //! Compiles AST to bytecode for deterministic execution
 
 use crate::ast::*;
 use crate::error::{DslError, Result};
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 
 /// Bytecode opcodes for the CRUE VM
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -92,7 +92,7 @@ impl Compiler {
         let mut compiler = CompilerState::new();
         compiler.compile_expression(&ast.when_clause)?;
         compiler.emit(Opcode::Ret);
-        
+
         Ok(Bytecode {
             instructions: compiler.instructions,
             constants: compiler.constants,
@@ -100,7 +100,7 @@ impl Compiler {
             action_instructions: compile_then_actions(&ast.then_clause),
         })
     }
-    
+
     /// Compute source hash
     pub fn compute_source_hash(source: &str) -> String {
         let mut hasher = Sha256::new();
@@ -134,7 +134,9 @@ fn compile_then_actions(actions: &[ActionNode]) -> Vec<ActionInstruction> {
             code,
             timeout_minutes,
         } => {
-            program.push(ActionInstruction::SetDecision(ActionDecision::ApprovalRequired));
+            program.push(ActionInstruction::SetDecision(
+                ActionDecision::ApprovalRequired,
+            ));
             program.push(ActionInstruction::SetErrorCode(code));
             program.push(ActionInstruction::SetApprovalTimeout(timeout_minutes));
         }
@@ -167,25 +169,25 @@ impl CompilerState {
             fields: Vec::new(),
         }
     }
-    
+
     fn emit(&mut self, opcode: Opcode) {
         self.instructions.push(opcode as u8);
     }
-    
+
     fn emit_u16(&mut self, value: u16) {
         self.instructions.extend_from_slice(&value.to_be_bytes());
     }
-    
+
     fn emit_u32(&mut self, value: u32) {
         self.instructions.extend_from_slice(&value.to_be_bytes());
     }
-    
+
     fn add_constant(&mut self, constant: Constant) -> u32 {
         let index = self.constants.len() as u32;
         self.constants.push(constant);
         index
     }
-    
+
     fn add_field(&mut self, field: &str) -> u16 {
         if let Some(idx) = self.fields.iter().position(|f| f == field) {
             return idx as u16;
@@ -194,7 +196,7 @@ impl CompilerState {
         self.fields.push(field.to_string());
         index
     }
-    
+
     fn compile_expression(&mut self, expr: &Expression) -> Result<()> {
         match expr {
             Expression::True => {
@@ -273,10 +275,37 @@ impl CompilerState {
                 self.emit(Opcode::Not);
             }
             Expression::In(_, _) => {
-                return Err(DslError::BytecodeError("IN operator not yet implemented".to_string()));
+                if let Expression::In(lhs, values) = expr {
+                    if values.is_empty() {
+                        self.emit(Opcode::LoadFalse);
+                    } else {
+                        let mut acc: Option<Expression> = None;
+                        for value in values {
+                            let eq = Expression::Eq(
+                                Box::new((**lhs).clone()),
+                                Box::new(Expression::Value(value.clone())),
+                            );
+                            acc = Some(match acc {
+                                None => eq,
+                                Some(prev) => Expression::Or(Box::new(prev), Box::new(eq)),
+                            });
+                        }
+                        if let Some(final_expr) = acc {
+                            self.compile_expression(&final_expr)?;
+                        } else {
+                            self.emit(Opcode::LoadFalse);
+                        }
+                    }
+                }
             }
             Expression::Between(_, _, _) => {
-                return Err(DslError::BytecodeError("BETWEEN operator not yet implemented".to_string()));
+                if let Expression::Between(value, lower, upper) = expr {
+                    let between_expr = Expression::And(
+                        Box::new(Expression::Gte(value.clone(), lower.clone())),
+                        Box::new(Expression::Lte(value.clone(), upper.clone())),
+                    );
+                    self.compile_expression(&between_expr)?;
+                }
             }
         }
         Ok(())
@@ -286,14 +315,14 @@ impl CompilerState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_compile_simple_expression() {
         let expr = Expression::Gt(
             Box::new(Expression::field("agent.requests_last_hour")),
             Box::new(Expression::number(50)),
         );
-        
+
         let bytecode = Compiler::compile(&RuleAst {
             id: "CRUE_001".to_string(),
             version: "1.0.0".to_string(),
@@ -309,8 +338,9 @@ mod tests {
                 created_at: "2026-01-01".to_string(),
                 validated_by: None,
             },
-        }).unwrap();
-        
+        })
+        .unwrap();
+
         assert!(!bytecode.instructions.is_empty());
         assert_eq!(
             bytecode.action_instructions,
@@ -320,7 +350,7 @@ mod tests {
             ]
         );
     }
-    
+
     #[test]
     fn test_source_hash() {
         let source = r#"RULE CRUE_001 VERSION 1.0 WHEN agent.requests_last_hour >= 50 THEN BLOCK"#;
@@ -364,5 +394,64 @@ mod tests {
                 ActionInstruction::Halt,
             ]
         );
+    }
+
+    #[test]
+    fn test_compile_in_operator() {
+        let ast = RuleAst {
+            id: "CRUE_IN".to_string(),
+            version: "1.0.0".to_string(),
+            signed: false,
+            when_clause: Expression::In(
+                Box::new(Expression::field("request.export_format")),
+                vec![
+                    Value::String("PDF".to_string()),
+                    Value::String("CSV".to_string()),
+                ],
+            ),
+            then_clause: vec![],
+            metadata: MetadataNode {
+                name: "Test".to_string(),
+                description: "IN".to_string(),
+                severity: "LOW".to_string(),
+                category: "TEST".to_string(),
+                author: "system".to_string(),
+                created_at: "2026-01-01".to_string(),
+                validated_by: None,
+            },
+        };
+        let bytecode = Compiler::compile(&ast).unwrap();
+        assert!(!bytecode.instructions.is_empty());
+        assert!(bytecode.instructions.contains(&(Opcode::Eq as u8)));
+        assert!(bytecode.instructions.contains(&(Opcode::Or as u8)));
+    }
+
+    #[test]
+    fn test_compile_between_operator() {
+        let ast = RuleAst {
+            id: "CRUE_BETWEEN".to_string(),
+            version: "1.0.0".to_string(),
+            signed: false,
+            when_clause: Expression::Between(
+                Box::new(Expression::field("request.request_hour")),
+                Box::new(Expression::number(8)),
+                Box::new(Expression::number(18)),
+            ),
+            then_clause: vec![],
+            metadata: MetadataNode {
+                name: "Test".to_string(),
+                description: "BETWEEN".to_string(),
+                severity: "LOW".to_string(),
+                category: "TEST".to_string(),
+                author: "system".to_string(),
+                created_at: "2026-01-01".to_string(),
+                validated_by: None,
+            },
+        };
+        let bytecode = Compiler::compile(&ast).unwrap();
+        assert!(!bytecode.instructions.is_empty());
+        assert!(bytecode.instructions.contains(&(Opcode::Gte as u8)));
+        assert!(bytecode.instructions.contains(&(Opcode::Lte as u8)));
+        assert!(bytecode.instructions.contains(&(Opcode::And as u8)));
     }
 }
