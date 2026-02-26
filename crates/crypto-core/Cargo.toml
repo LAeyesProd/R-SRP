@@ -1,11 +1,40 @@
-# Crypto Core - Cryptographic Primitives for R-SRP
+# RSRP Security Core - Cryptographic Primitives
+#
+# Provides hashing, signatures, and key management.
 
 [package]
-name = "crypto-core"
+name = "rsrp-security-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
+description = "Security primitives for deterministic proof systems (hashing, signatures, Merkle helpers)"
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "README.md"
+documentation = "https://docs.rs/rsrp-security-core"
+
+[lib]
+name = "crypto_core"
+
+[package.metadata.aliases]
+# Future: rsrp-security-core = "crypto-core"
+
+[features]
+default = ["std", "hash", "signature", "merkle"]
+std = []
+# Enable hashing (SHA-256, SHA-512, BLAKE3)
+hash = []
+# Enable digital signatures (Ed25519, RSA-PSS)
+signature = []
+# Enable Merkle tree implementation
+merkle = []
+# Enterprise/Private: HSM integration (PKCS#11)
+hsm = []
+# Enable FIPS mode
+fips = []
 
 [dependencies]
 sha2 = "0.10"
@@ -14,11 +43,13 @@ ed25519-dalek = { version = "2.1", features = ["rand_core", "serde"] }
 rsa = { version = "0.9", features = ["sha2", "serde"] }
 signature = "2.2"
 digest = "0.10"
-rand = "0.8"
+rand = { version = "0.8", features = ["std", "std_rng"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
+zeroize = { version = "1.7", features = ["derive"] }
+uuid = { version = "1", features = ["v4", "serde"] }
 
 [dev-dependencies]
 tempfile = "3.8"

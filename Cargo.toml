@@ -10,6 +10,7 @@ members = [
     "crates/crypto-core",
     "crates/immutable-logging",
     "crates/pqcrypto",
+    "rsrp-demo",
     "services/api-service",
 ]
 

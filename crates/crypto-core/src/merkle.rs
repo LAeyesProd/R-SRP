@@ -1,7 +1,7 @@
 //! Merkle Tree implementation for hourly audit logs
 
 use crate::{HashAlgorithm, Result, CryptoError};
-use crate::hash::{hash, hash_hex};
+use crate::hash::hash;
 use serde::{Deserialize, Serialize};
 
 /// Merkle tree node
@@ -115,27 +115,19 @@ impl MerkleTree {
         let mid = (nodes.len() + 1) / 2;
         
         if index < mid {
-            // Left side - need right sibling
-            let right_hash = if index + mid < nodes.len() {
-                hex_encode(&nodes[mid])
-            } else {
-                hex_encode(&nodes[index]) // Single child, use self
-            };
-            
+            // Build leaf-to-root proof ordering: recurse first, then append sibling subtree root.
+            self.build_proof(&nodes[..mid], index, path);
             path.push(MerkleProofStep {
                 side: "right".to_string(),
-                hash: right_hash,
+                hash: hex_encode(&self.build_tree(&nodes[mid..])),
             });
-            
-            self.build_proof(&nodes[..mid], index, path);
         } else {
-            // Right side - need left sibling
+            // Build leaf-to-root proof ordering: recurse first, then append sibling subtree root.
+            self.build_proof(&nodes[mid..], index - mid, path);
             path.push(MerkleProofStep {
                 side: "left".to_string(),
-                hash: hex_encode(&nodes[0]),
+                hash: hex_encode(&self.build_tree(&nodes[..mid])),
             });
-            
-            self.build_proof(&nodes[mid..], index - mid, path);
         }
     }
 }

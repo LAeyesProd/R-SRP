@@ -4,6 +4,7 @@
 //! to provide security against both classical and quantum attackers.
 
 use serde::{Deserialize, Serialize};
+use sha2::Digest;
 use zeroize::Zeroize;
 
 use crate::error::{PqcError, PqcResult};
@@ -78,7 +79,30 @@ pub struct HybridKeyPair {
     pub quantum_public: DilithiumPublicKey,
     pub quantum_secret: DilithiumSecretKey,
     /// Security level
+    #[zeroize(skip)]
     pub level: DilithiumLevel,
+}
+
+/// Public-only hybrid verification key (safe to share with verifiers).
+#[derive(Clone, Serialize, Deserialize)]
+pub struct HybridPublicKey {
+    /// Classical Ed25519 public component (mock representation in current implementation)
+    pub classical_public: Vec<u8>,
+    /// Post-quantum ML-DSA public key
+    pub quantum_public: DilithiumPublicKey,
+    /// Security level
+    pub level: DilithiumLevel,
+}
+
+impl HybridKeyPair {
+    /// Extract a public-only verification key from a hybrid signing key pair.
+    pub fn public_key(&self) -> HybridPublicKey {
+        HybridPublicKey {
+            classical_public: self.classical_public.clone(),
+            quantum_public: self.quantum_public.clone(),
+            level: self.level,
+        }
+    }
 }
 
 /// Hybrid KEM: X25519 + Kyber
@@ -150,6 +174,7 @@ pub struct HybridKEMKeyPair {
     /// Post-quantum Kyber secret key
     pub quantum_secret: KyberSecretKey,
     /// Security level
+    #[zeroize(skip)]
     pub level: KyberLevel,
 }
 
@@ -167,15 +192,18 @@ impl HybridSigner {
             level,
         }
     }
+
+    pub fn backend_id(&self) -> &'static str {
+        self.dilithium.backend_id()
+    }
     
     /// Generate hybrid key pair
     pub fn generate_keypair(&self) -> PqcResult<HybridKeyPair> {
-        // Generate classical Ed25519 key pair (simulated)
+        // Generate classical key pair (mock, deterministic verification path)
         let mut rng = rand::thread_rng();
-        let mut classical_public = vec![0u8; 32];
         let mut classical_secret = vec![0u8; 64];
-        rand::RngCore::fill_bytes(&mut rng, &mut classical_public);
         rand::RngCore::fill_bytes(&mut rng, &mut classical_secret);
+        let classical_public = mock_classical_public(&classical_secret);
         
         // Generate quantum Dilithium key pair
         let (quantum_public, quantum_secret) = self.dilithium.generate_keypair()?;
@@ -191,18 +219,8 @@ impl HybridSigner {
     
     /// Sign with both classical and quantum algorithms
     pub fn sign(&self, keypair: &HybridKeyPair, message: &[u8]) -> PqcResult<HybridSignature> {
-        // Classical signature (simulated Ed25519)
-        let mut rng = rand::thread_rng();
-        let mut classical_sig = vec![0u8; 64];
-        rand::RngCore::fill_bytes(&mut rng, &mut classical_sig);
-        
-        // Include message in classical signature
-        let msg_hash = sha2::Sha256::digest(message);
-        for (i, byte) in msg_hash.iter().enumerate() {
-            if i < classical_sig.len() {
-                classical_sig[i] ^= *byte;
-            }
-        }
+        // Classical signature (mock but deterministic and verifiable)
+        let classical_sig = mock_classical_signature(&keypair.classical_public, message);
         
         // Quantum signature (Dilithium)
         let quantum_sig = self.dilithium.sign(&keypair.quantum_secret, message)?;
@@ -214,6 +232,7 @@ impl HybridSigner {
 /// Hybrid verifier for dual signatures
 pub struct HybridVerifier {
     dilithium: Dilithium,
+    #[allow(dead_code)]
     level: DilithiumLevel,
 }
 
@@ -230,17 +249,37 @@ impl HybridVerifier {
     /// 
     /// Note: Both classical AND quantum must verify successfully
     pub fn verify(&self, keypair: &HybridKeyPair, message: &[u8], signature: &HybridSignature) -> PqcResult<bool> {
-        // Verify classical signature
-        // In production, use proper Ed25519 verification
+        self.verify_public(&keypair.public_key(), message, signature)
+    }
+
+    /// Verify hybrid signature using a public-only key.
+    ///
+    /// This is the production-oriented verification path (no secret key material required).
+    pub fn verify_public(
+        &self,
+        public_key: &HybridPublicKey,
+        message: &[u8],
+        signature: &HybridSignature,
+    ) -> PqcResult<bool> {
+        if public_key.level != self.level || public_key.quantum_public.level != self.level {
+            return Err(PqcError::InvalidKey("Hybrid public key level mismatch".into()));
+        }
+        if signature.quantum.level != self.level {
+            return Err(PqcError::InvalidSignature("Hybrid signature level mismatch".into()));
+        }
+
+        // Verify classical signature (mock deterministic backend)
         if signature.classical.len() != 64 {
             return Err(PqcError::InvalidSignature("Invalid classical sig".into()));
         }
+        let expected_classical = mock_classical_signature(&public_key.classical_public, message);
+        let classical_valid = signature.classical == expected_classical;
         
         // Verify quantum signature
-        let quantum_valid = self.dilithium.verify(&keypair.quantum_public, message, &signature.quantum)?;
+        let quantum_valid = self.dilithium.verify(&public_key.quantum_public, message, &signature.quantum)?;
         
         // Both must be valid
-        Ok(quantum_valid)
+        Ok(classical_valid && quantum_valid)
     }
 }
 
@@ -257,6 +296,10 @@ impl HybridKEMEncapsulator {
             kyber: Kyber::new(level),
             level,
         }
+    }
+
+    pub fn backend_id(&self) -> &'static str {
+        self.kyber.backend_id()
     }
     
     /// Generate hybrid KEM key pair
@@ -308,7 +351,32 @@ impl HybridKEMEncapsulator {
 /// Hybrid KEM decapsulator
 pub struct HybridKEMDecapsulator {
     kyber: Kyber,
+    #[allow(dead_code)]
     level: KyberLevel,
+}
+
+fn mock_classical_public(secret: &[u8]) -> Vec<u8> {
+    let mut h = sha2::Sha256::new();
+    h.update(b"rsrp-hybrid-mock-classical-public");
+    h.update(secret);
+    h.finalize().to_vec()
+}
+
+fn mock_classical_signature(public_key: &[u8], message: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(64);
+    let mut counter = 0u32;
+    while out.len() < 64 {
+        let mut h = sha2::Sha256::new();
+        h.update(b"rsrp-hybrid-mock-classical-signature");
+        h.update(counter.to_be_bytes());
+        h.update(public_key);
+        h.update(message);
+        let block = h.finalize();
+        let remaining = 64 - out.len();
+        out.extend_from_slice(&block[..remaining.min(block.len())]);
+        counter = counter.wrapping_add(1);
+    }
+    out
 }
 
 impl HybridKEMDecapsulator {
@@ -318,6 +386,10 @@ impl HybridKEMDecapsulator {
             kyber: Kyber::new(level),
             level,
         }
+    }
+
+    pub fn backend_id(&self) -> &'static str {
+        self.kyber.backend_id()
     }
     
     /// Decapsulate shared secret from ciphertext
@@ -357,6 +429,26 @@ mod tests {
         
         let result = verifier.verify(&keypair, message, &signature);
         assert!(result.unwrap());
+    }
+
+    #[test]
+    fn test_hybrid_signature_rejects_tampered_classical_part() {
+        let signer = HybridSigner::new(DilithiumLevel::Dilithium2);
+        let verifier = HybridVerifier::new(DilithiumLevel::Dilithium2);
+        let keypair = signer.generate_keypair().unwrap();
+        let mut signature = signer.sign(&keypair, b"m").unwrap();
+        signature.classical[0] ^= 0x55;
+        assert!(!verifier.verify(&keypair, b"m", &signature).unwrap());
+    }
+
+    #[test]
+    fn test_hybrid_signature_verify_public_only() {
+        let signer = HybridSigner::new(DilithiumLevel::Dilithium2);
+        let verifier = HybridVerifier::new(DilithiumLevel::Dilithium2);
+        let keypair = signer.generate_keypair().unwrap();
+        let public_key = keypair.public_key();
+        let signature = signer.sign(&keypair, b"m").unwrap();
+        assert!(verifier.verify_public(&public_key, b"m", &signature).unwrap());
     }
     
     #[test]

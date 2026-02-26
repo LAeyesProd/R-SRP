@@ -7,7 +7,7 @@ use crate::error::{DslError, Result};
 use sha2::{Sha256, Digest};
 
 /// Bytecode opcodes for the CRUE VM
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[repr(u8)]
 pub enum Opcode {
     /// Load field onto stack
@@ -45,18 +45,43 @@ pub enum Opcode {
 }
 
 /// Compiled bytecode with metadata
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Bytecode {
     pub instructions: Vec<u8>,
     pub constants: Vec<Constant>,
     pub fields: Vec<String>,
+    #[serde(default)]
+    pub action_instructions: Vec<ActionInstruction>,
 }
 
 /// Constant pool entry
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Constant {
     Number(i64),
     String(String),
     Boolean(bool),
+}
+
+/// Typed action bytecode emitted from the `THEN` clause.
+///
+/// This is kept explicit (not packed bytes) for determinism and easier schema evolution.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ActionInstruction {
+    SetDecision(ActionDecision),
+    SetErrorCode(String),
+    SetMessage(String),
+    SetApprovalTimeout(u32),
+    SetAlertSoc(bool),
+    Halt,
+}
+
+/// Serializable action decision enum for compiled `THEN` semantics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ActionDecision {
+    Allow,
+    Block,
+    Warn,
+    ApprovalRequired,
 }
 
 /// CRUE DSL Compiler
@@ -72,6 +97,7 @@ impl Compiler {
             instructions: compiler.instructions,
             constants: compiler.constants,
             fields: compiler.fields,
+            action_instructions: compile_then_actions(&ast.then_clause),
         })
     }
     
@@ -81,6 +107,50 @@ impl Compiler {
         hasher.update(source.as_bytes());
         format!("{:x}", hasher.finalize())
     }
+}
+
+fn compile_then_actions(actions: &[ActionNode]) -> Vec<ActionInstruction> {
+    let has_soc_alert = actions.iter().any(|a| matches!(a, ActionNode::AlertSoc));
+    let primary = actions
+        .iter()
+        .find(|a| !matches!(a, ActionNode::AlertSoc))
+        .cloned()
+        .unwrap_or(ActionNode::Log);
+
+    let mut program = Vec::new();
+    match primary {
+        ActionNode::Block { code, message } => {
+            program.push(ActionInstruction::SetDecision(ActionDecision::Block));
+            program.push(ActionInstruction::SetErrorCode(code));
+            if let Some(msg) = message {
+                program.push(ActionInstruction::SetMessage(msg));
+            }
+        }
+        ActionNode::Warn { code } => {
+            program.push(ActionInstruction::SetDecision(ActionDecision::Warn));
+            program.push(ActionInstruction::SetErrorCode(code));
+        }
+        ActionNode::RequireApproval {
+            code,
+            timeout_minutes,
+        } => {
+            program.push(ActionInstruction::SetDecision(ActionDecision::ApprovalRequired));
+            program.push(ActionInstruction::SetErrorCode(code));
+            program.push(ActionInstruction::SetApprovalTimeout(timeout_minutes));
+        }
+        ActionNode::Log => {
+            program.push(ActionInstruction::SetDecision(ActionDecision::Allow));
+        }
+        ActionNode::AlertSoc => {
+            program.push(ActionInstruction::SetDecision(ActionDecision::Allow));
+        }
+    }
+
+    if has_soc_alert {
+        program.push(ActionInstruction::SetAlertSoc(true));
+    }
+    program.push(ActionInstruction::Halt);
+    program
 }
 
 struct CompilerState {
@@ -242,6 +312,13 @@ mod tests {
         }).unwrap();
         
         assert!(!bytecode.instructions.is_empty());
+        assert_eq!(
+            bytecode.action_instructions,
+            vec![
+                ActionInstruction::SetDecision(ActionDecision::Allow),
+                ActionInstruction::Halt
+            ]
+        );
     }
     
     #[test]
@@ -249,5 +326,43 @@ mod tests {
         let source = r#"RULE CRUE_001 VERSION 1.0 WHEN agent.requests_last_hour >= 50 THEN BLOCK"#;
         let hash = Compiler::compute_source_hash(source);
         assert_eq!(hash.len(), 64); // SHA-256 hex
+    }
+
+    #[test]
+    fn test_compile_then_actions_emits_action_bytecode() {
+        let ast = RuleAst {
+            id: "CRUE_002".to_string(),
+            version: "1.0.0".to_string(),
+            signed: false,
+            when_clause: Expression::True,
+            then_clause: vec![
+                ActionNode::Block {
+                    code: "BLOCK_ME".to_string(),
+                    message: Some("Denied".to_string()),
+                },
+                ActionNode::AlertSoc,
+            ],
+            metadata: MetadataNode {
+                name: "Test".to_string(),
+                description: "Test rule".to_string(),
+                severity: "HIGH".to_string(),
+                category: "TEST".to_string(),
+                author: "system".to_string(),
+                created_at: "2026-01-01".to_string(),
+                validated_by: None,
+            },
+        };
+
+        let bytecode = Compiler::compile(&ast).unwrap();
+        assert_eq!(
+            bytecode.action_instructions,
+            vec![
+                ActionInstruction::SetDecision(ActionDecision::Block),
+                ActionInstruction::SetErrorCode("BLOCK_ME".to_string()),
+                ActionInstruction::SetMessage("Denied".to_string()),
+                ActionInstruction::SetAlertSoc(true),
+                ActionInstruction::Halt,
+            ]
+        );
     }
 }

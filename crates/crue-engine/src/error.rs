@@ -12,6 +12,9 @@ pub enum EngineError {
     
     #[error("Invalid operator: {0}")]
     InvalidOperator(String),
+
+    #[error("Invalid action: {0}")]
+    InvalidAction(String),
     
     #[error("Type mismatch for field: {0}")]
     TypeMismatch(String),

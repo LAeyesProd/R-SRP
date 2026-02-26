@@ -1,10 +1,16 @@
 //! Kyber Post-Quantum Key Encapsulation Mechanism
-//! 
+//!
 //! Implements ML-KEM (Module-Lattice Key Encapsulation Method)
-//! as specified in NIST FIPS 203.
+//! provider abstractions for mock and real backends.
 
 use serde::{Deserialize, Serialize};
+use sha2::Digest;
 use zeroize::Zeroize;
+
+use crate::error::{PqcError, PqcResult};
+
+#[cfg(feature = "real-crypto")]
+use oqs::kem;
 
 /// Kyber security levels
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -22,12 +28,12 @@ impl KyberLevel {
     /// Get algorithm identifier
     pub fn algorithm_id(&self) -> &'static str {
         match self {
-            KyberLevel::Kyber512 => "ML-KEM-768",
-            KyberLevel::Kyber768 => "ML-KEM-1024",
+            KyberLevel::Kyber512 => "ML-KEM-512",
+            KyberLevel::Kyber768 => "ML-KEM-768",
             KyberLevel::Kyber1024 => "ML-KEM-1024",
         }
     }
-    
+
     /// Get public key size in bytes
     pub fn public_key_size(&self) -> usize {
         match self {
@@ -36,7 +42,7 @@ impl KyberLevel {
             KyberLevel::Kyber1024 => 1568,
         }
     }
-    
+
     /// Get secret key size in bytes
     pub fn secret_key_size(&self) -> usize {
         match self {
@@ -45,7 +51,7 @@ impl KyberLevel {
             KyberLevel::Kyber1024 => 3168,
         }
     }
-    
+
     /// Get ciphertext size in bytes
     pub fn ciphertext_size(&self) -> usize {
         match self {
@@ -54,10 +60,10 @@ impl KyberLevel {
             KyberLevel::Kyber1024 => 1568,
         }
     }
-    
+
     /// Get shared secret size in bytes
     pub fn shared_secret_size(&self) -> usize {
-        32 // Always 256 bits
+        32
     }
 }
 
@@ -66,6 +72,7 @@ impl KyberLevel {
 #[zeroize(drop)]
 pub struct KyberPublicKey {
     /// Algorithm level
+    #[zeroize(skip)]
     pub level: KyberLevel,
     /// Public key bytes
     #[zeroize(skip)]
@@ -77,6 +84,7 @@ pub struct KyberPublicKey {
 #[zeroize(drop)]
 pub struct KyberSecretKey {
     /// Algorithm level
+    #[zeroize(skip)]
     pub level: KyberLevel,
     /// Secret key bytes
     pub key: Vec<u8>,
@@ -87,11 +95,38 @@ pub struct KyberSecretKey {
 #[zeroize(drop)]
 pub struct KyberCiphertext {
     /// Algorithm level
+    #[zeroize(skip)]
     pub level: KyberLevel,
     /// Ciphertext bytes
     #[zeroize(skip)]
     pub ciphertext: Vec<u8>,
 }
+
+/// KEM backend provider abstraction (mock or real implementation).
+pub trait KemProvider {
+    fn backend_id(&self) -> &'static str;
+    fn generate_keypair(&self, level: KyberLevel) -> PqcResult<(KyberPublicKey, KyberSecretKey)>;
+    fn encapsulate(
+        &self,
+        level: KyberLevel,
+        public_key: &KyberPublicKey,
+    ) -> PqcResult<(Vec<u8>, KyberCiphertext)>;
+    fn decapsulate(
+        &self,
+        level: KyberLevel,
+        secret_key: &KyberSecretKey,
+        ciphertext: &KyberCiphertext,
+    ) -> PqcResult<Vec<u8>>;
+}
+
+/// Mock KEM provider used for development/tests.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct MockKemProvider;
+
+/// Placeholder real-provider integration point (liboqs/OQS-backed).
+#[cfg(feature = "real-crypto")]
+#[derive(Debug, Default, Clone, Copy)]
+pub struct OqsKemProvider;
 
 /// Kyber context for KEM operations
 pub struct Kyber {
@@ -101,99 +136,272 @@ pub struct Kyber {
 impl Kyber {
     /// Create new Kyber context
     pub fn new(level: KyberLevel) -> Self {
+        assert_backend_selected();
         Self { level }
     }
-    
+
+    pub fn backend_id(&self) -> &'static str {
+        active_provider().backend_id()
+    }
+
     /// Generate new key pair
     pub fn generate_keypair(&self) -> PqcResult<(KyberPublicKey, KyberSecretKey)> {
-        let mut rng = rand::thread_rng();
-        let mut public_key = vec![0u8; self.level.public_key_size()];
-        let mut secret_key = vec![0u8; self.level.secret_key_size()];
-        
-        rand::RngCore::fill_bytes(&mut rng, &mut public_key);
-        rand::RngCore::fill_bytes(&mut rng, &mut secret_key);
-        
-        Ok((
-            KyberPublicKey {
-                level: self.level,
-                key: public_key,
-            },
-            KyberSecretKey {
-                level: self.level,
-                key: secret_key,
-            },
-        ))
+        active_provider().generate_keypair(self.level)
     }
-    
+
     /// Encapsulate (generate shared secret + ciphertext)
     pub fn encapsulate(&self, public_key: &KyberPublicKey) -> PqcResult<(Vec<u8>, KyberCiphertext)> {
         if public_key.level != self.level {
             return Err(PqcError::InvalidKey("Key level mismatch".into()));
         }
-        
-        let mut rng = rand::thread_rng();
-        
-        // Generate shared secret
-        let mut shared_secret = vec![0u8; self.level.shared_secret_size()];
-        rand::RngCore::fill_bytes(&mut rng, &mut shared_secret);
-        
-        // Generate ciphertext
-        let mut ciphertext = vec![0u8; self.level.ciphertext_size()];
-        rand::RngCore::fill_bytes(&mut rng, &mut ciphertext);
-        
-        Ok((
-            shared_secret,
-            KyberCiphertext {
-                level: self.level,
-                ciphertext,
-            },
-        ))
+        active_provider().encapsulate(self.level, public_key)
     }
-    
+
     /// Decapsulate (recover shared secret from ciphertext)
     pub fn decapsulate(&self, secret_key: &KyberSecretKey, ciphertext: &KyberCiphertext) -> PqcResult<Vec<u8>> {
         if secret_key.level != self.level || ciphertext.level != self.level {
             return Err(PqcError::InvalidKey("Level mismatch".into()));
         }
-        
-        // In production, use liboqs for actual decapsulation
-        // For now, derive shared secret from key and ciphertext
-        let mut shared_secret = vec![0u8; self.level.shared_secret_size()];
-        
-        // Simple derivation (would use proper KDF in production)
-        let mut hasher = sha2::Sha256::new();
-        hasher.update(&secret_key.key);
-        hasher.update(&ciphertext.ciphertext);
-        let hash = hasher.finalize();
-        
-        shared_secret.copy_from_slice(&hash[..32]);
-        
-        Ok(shared_secret)
+        active_provider().decapsulate(self.level, secret_key, ciphertext)
     }
 }
 
-use crate::error::{PqcError, PqcResult};
+fn assert_backend_selected() {
+    #[cfg(not(any(feature = "mock-crypto", feature = "real-crypto")))]
+    panic!("rsrp-pqcrypto: no KEM backend selected (enable `mock-crypto` or `real-crypto`)");
+}
+
+fn active_provider() -> &'static dyn KemProvider {
+    #[cfg(feature = "real-crypto")]
+    {
+        &OQS_KEM_PROVIDER
+    }
+    #[cfg(all(not(feature = "real-crypto"), feature = "mock-crypto"))]
+    {
+        &MOCK_KEM_PROVIDER
+    }
+    #[cfg(not(any(feature = "mock-crypto", feature = "real-crypto")))]
+    {
+        panic!("rsrp-pqcrypto: no KEM backend selected (enable `mock-crypto` or `real-crypto`)");
+    }
+}
+
+#[cfg(feature = "mock-crypto")]
+static MOCK_KEM_PROVIDER: MockKemProvider = MockKemProvider;
+
+#[cfg(feature = "real-crypto")]
+static OQS_KEM_PROVIDER: OqsKemProvider = OqsKemProvider;
+
+impl KemProvider for MockKemProvider {
+    fn backend_id(&self) -> &'static str {
+        "mock-crypto"
+    }
+
+    fn generate_keypair(&self, level: KyberLevel) -> PqcResult<(KyberPublicKey, KyberSecretKey)> {
+        let mut rng = rand::thread_rng();
+        let mut secret_key = vec![0u8; level.secret_key_size()];
+        rand::RngCore::fill_bytes(&mut rng, &mut secret_key);
+        let public_key = derive_mock_public_key(level, &secret_key);
+
+        Ok((
+            KyberPublicKey { level, key: public_key.clone() },
+            KyberSecretKey {
+                level,
+                key: embed_public_component(level, &secret_key, &public_key),
+            },
+        ))
+    }
+
+    fn encapsulate(
+        &self,
+        level: KyberLevel,
+        public_key: &KyberPublicKey,
+    ) -> PqcResult<(Vec<u8>, KyberCiphertext)> {
+        if public_key.key.len() != level.public_key_size() {
+            return Err(PqcError::InvalidKey("Invalid public key length".into()));
+        }
+        let mut rng = rand::thread_rng();
+        let mut ciphertext = vec![0u8; level.ciphertext_size()];
+        rand::RngCore::fill_bytes(&mut rng, &mut ciphertext);
+
+        let shared_secret = derive_mock_shared_secret(level, &public_key.key, &ciphertext);
+        Ok((
+            shared_secret,
+            KyberCiphertext {
+                level,
+                ciphertext,
+            },
+        ))
+    }
+
+    fn decapsulate(
+        &self,
+        level: KyberLevel,
+        secret_key: &KyberSecretKey,
+        ciphertext: &KyberCiphertext,
+    ) -> PqcResult<Vec<u8>> {
+        if secret_key.key.len() != level.secret_key_size() {
+            return Err(PqcError::InvalidKey("Invalid secret key length".into()));
+        }
+        if ciphertext.ciphertext.len() != level.ciphertext_size() {
+            return Err(PqcError::InvalidParameter("Invalid ciphertext length".into()));
+        }
+        let public_len = level.public_key_size();
+        let public_part = &secret_key.key[..public_len];
+        Ok(derive_mock_shared_secret(level, public_part, &ciphertext.ciphertext))
+    }
+}
+
+#[cfg(feature = "real-crypto")]
+impl KemProvider for OqsKemProvider {
+    fn backend_id(&self) -> &'static str {
+        "oqs"
+    }
+
+    fn generate_keypair(&self, _level: KyberLevel) -> PqcResult<(KyberPublicKey, KyberSecretKey)> {
+        let level = _level;
+        oqs::init();
+        let kem = oqs_kem_for_level(level)?;
+        let (pk, sk) = kem
+            .keypair()
+            .map_err(|e| PqcError::KeyGenerationFailed(e.to_string()))?;
+        let public_key = pk.into_vec();
+        let secret_key = sk.into_vec();
+        if public_key.len() != level.public_key_size() || secret_key.len() != level.secret_key_size() {
+            return Err(PqcError::KeyGenerationFailed(
+                "OQS key sizes do not match expected ML-KEM sizes".into(),
+            ));
+        }
+        Ok((
+            KyberPublicKey { level, key: public_key },
+            KyberSecretKey { level, key: secret_key },
+        ))
+    }
+
+    fn encapsulate(
+        &self,
+        _level: KyberLevel,
+        _public_key: &KyberPublicKey,
+    ) -> PqcResult<(Vec<u8>, KyberCiphertext)> {
+        oqs::init();
+        let kem = oqs_kem_for_level(_level)?;
+        let pk = kem
+            .public_key_from_bytes(&public_key.key)
+            .ok_or_else(|| PqcError::InvalidKey("Invalid ML-KEM public key length".into()))?;
+        let (ct, ss) = kem
+            .encapsulate(pk)
+            .map_err(|e| PqcError::EncryptionFailed(e.to_string()))?;
+        Ok((
+            ss.into_vec(),
+            KyberCiphertext {
+                level: _level,
+                ciphertext: ct.into_vec(),
+            },
+        ))
+    }
+
+    fn decapsulate(
+        &self,
+        _level: KyberLevel,
+        _secret_key: &KyberSecretKey,
+        _ciphertext: &KyberCiphertext,
+    ) -> PqcResult<Vec<u8>> {
+        oqs::init();
+        let kem = oqs_kem_for_level(_level)?;
+        let sk = kem
+            .secret_key_from_bytes(&secret_key.key)
+            .ok_or_else(|| PqcError::InvalidKey("Invalid ML-KEM secret key length".into()))?;
+        let ct = kem
+            .ciphertext_from_bytes(&ciphertext.ciphertext)
+            .ok_or_else(|| PqcError::InvalidParameter("Invalid ML-KEM ciphertext length".into()))?;
+        let ss = kem
+            .decapsulate(sk, ct)
+            .map_err(|e| PqcError::DecapsulationFailed(e.to_string()))?;
+        Ok(ss.into_vec())
+    }
+}
+
+#[cfg(feature = "real-crypto")]
+fn oqs_kem_for_level(level: KyberLevel) -> PqcResult<kem::Kem> {
+    use kem::Algorithm;
+    let alg = match level {
+        KyberLevel::Kyber512 => Algorithm::MlKem512,
+        KyberLevel::Kyber768 => Algorithm::MlKem768,
+        KyberLevel::Kyber1024 => Algorithm::MlKem1024,
+    };
+    kem::Kem::new(alg).map_err(|e| PqcError::UnsupportedAlgorithm(e.to_string()))
+}
+
+fn derive_mock_public_key(level: KyberLevel, secret_key: &[u8]) -> Vec<u8> {
+    expand_hash(level, b"rsrp-mock-mlkem-public", &[secret_key], level.public_key_size())
+}
+
+fn embed_public_component(level: KyberLevel, secret_key: &[u8], public_key: &[u8]) -> Vec<u8> {
+    let mut out = secret_key.to_vec();
+    out[..level.public_key_size()].copy_from_slice(public_key);
+    out
+}
+
+fn derive_mock_shared_secret(level: KyberLevel, public_key: &[u8], ciphertext: &[u8]) -> Vec<u8> {
+    expand_hash(
+        level,
+        b"rsrp-mock-mlkem-shared-secret",
+        &[public_key, ciphertext],
+        level.shared_secret_size(),
+    )
+}
+
+fn expand_hash(level: KyberLevel, domain: &[u8], parts: &[&[u8]], out_len: usize) -> Vec<u8> {
+    let mut out = Vec::with_capacity(out_len);
+    let mut counter = 0u32;
+    while out.len() < out_len {
+        let mut h = sha2::Sha256::new();
+        h.update(domain);
+        h.update(level.algorithm_id().as_bytes());
+        h.update(counter.to_be_bytes());
+        for part in parts {
+            h.update((*part).len().to_be_bytes());
+            h.update(*part);
+        }
+        let block = h.finalize();
+        let remaining = out_len - out.len();
+        out.extend_from_slice(&block[..remaining.min(block.len())]);
+        counter = counter.wrapping_add(1);
+    }
+    out
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_kyber_key_sizes() {
         let kyber512 = Kyber::new(KyberLevel::Kyber512);
         assert_eq!(kyber512.level.public_key_size(), 800);
         assert_eq!(kyber512.level.secret_key_size(), 1632);
         assert_eq!(kyber512.level.ciphertext_size(), 768);
+        assert_eq!(KyberLevel::Kyber512.algorithm_id(), "ML-KEM-512");
     }
-    
+
     #[test]
     fn test_kyber_kem() {
         let kyber = Kyber::new(KyberLevel::Kyber512);
         let (public_key, secret_key) = kyber.generate_keypair().unwrap();
-        
+
         let (shared_secret_1, ciphertext) = kyber.encapsulate(&public_key).unwrap();
         let shared_secret_2 = kyber.decapsulate(&secret_key, &ciphertext).unwrap();
-        
+
         assert_eq!(shared_secret_1, shared_secret_2);
+    }
+
+    #[test]
+    fn test_kyber_decapsulation_rejects_tampered_ciphertext() {
+        let kyber = Kyber::new(KyberLevel::Kyber768);
+        let (public_key, secret_key) = kyber.generate_keypair().unwrap();
+        let (shared_secret, mut ciphertext) = kyber.encapsulate(&public_key).unwrap();
+        ciphertext.ciphertext[0] ^= 0x01;
+        let tampered = kyber.decapsulate(&secret_key, &ciphertext).unwrap();
+        assert_ne!(shared_secret, tampered);
     }
 }

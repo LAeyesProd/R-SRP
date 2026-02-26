@@ -1,16 +1,50 @@
-# PQCrypto - Post-Quantum Cryptography for R-SRP Ultra
+# RSRP Post-Quantum Cryptography
+#
 # Hybrid mode: Classical + Post-Quantum
 # Implements NIST PQC Standards (2024)
 
 [package]
-name = "pqcrypto"
+name = "rsrp-pqcrypto"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
+description = "Hybrid post-quantum cryptographic primitives for deterministic proof systems"
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "README.md"
+documentation = "https://docs.rs/rsrp-pqcrypto"
+
+[lib]
+name = "pqcrypto"
+
+[package.metadata.aliases]
+# Future: rsrp-pqcrypto = "pqcrypto"
+
+[features]
+default = ["mock-crypto"]
+mock-crypto = []
+real-crypto = ["dep:oqs"]
+use-pure-rust = []
+
+# Enable Dilithium (signature)
+dilithium2 = []
+dilithium3 = []
+dilithium5 = []
+
+# Enable Kyber (KEM)
+kyber512 = []
+kyber768 = []
+kyber1024 = []
+
+# Falcon (signature) - large keys
+falcon512 = []
+falcon1024 = []
 
 [dependencies]
-# Classical crypto (already in workspace)
+# Classical crypto
 ed25519-dalek = { version = "2.1", features = ["rand_core", "serde"] }
 rsa = { version = "0.9", features = ["sha2", "serde"] }
 sha2 = "0.10"
@@ -35,33 +69,5 @@ rand = "0.8"
 
 # Base64 encoding
 base64 = "0.22"
+oqs = { version = "0.11", optional = true, default-features = false, features = ["std", "ml_dsa", "ml_kem"] }
 
-[build-dependencies]
-# Build script for system liboqs
-system-deps = "6.0"
-
-[features]
-default = ["use-liboqs"]
-use-liboqs = ["dep:system-deps"]
-use-pure-rust = []
-
-# Enable Dilithium (signature)
-dilithium2 = []
-dilithium3 = []
-dilithium5 = []
-
-# Enable Kyber (KEM)
-kyber512 = []
-kyber768 = []
-kyber1024 = []
-
-# Falcon (signature) - large keys
-falcon512 = []
-falcon1024 = []
-
-[profile.release]
-opt-level = 3
-lto = "fat"
-codegen-units = 1
-panic = "abort"
-strip = true

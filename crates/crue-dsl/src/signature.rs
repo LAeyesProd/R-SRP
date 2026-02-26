@@ -2,7 +2,7 @@
 //! 
 //! Handles RSA-PSS signing and verification of compiled rules
 
-use crate::error::{DslError, Result};
+use crate::error::Result;
 use sha2::{Sha256, Digest};
 
 /// Rule signature metadata
@@ -49,9 +49,10 @@ impl RuleSigner for InMemorySigner {
         // For now, create a simple HMAC signature
         use blake3::Hasher;
         
-        let mut hasher = Hasher::new_keyed(&self.private_key);
+        let key = blake3::hash(&self.private_key);
+        let mut hasher = Hasher::new_keyed(key.as_bytes());
         hasher.update(bytecode);
-        let mut result = hasher.finalize();
+        let result = hasher.finalize();
         
         Ok(result.as_bytes().to_vec())
     }
@@ -66,7 +67,7 @@ pub fn verify_signature(
     bytecode: &[u8],
     signature: &[u8],
     _key_id: &str,
-    public_key: &[u8],
+    _public_key: &[u8],
 ) -> Result<bool> {
     // In production, use RSA-PSS verification
     // This is a placeholder verification

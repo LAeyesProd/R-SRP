@@ -8,6 +8,9 @@ pub mod context;
 pub mod decision;
 pub mod rules;
 pub mod error;
+pub mod vm;
+pub mod proof;
+pub mod ir;
 
 use serde::{Deserialize, Serialize};
 

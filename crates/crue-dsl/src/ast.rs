@@ -162,7 +162,7 @@ impl Expression {
             Expression::Field(path) => vec![path.clone()],
             Expression::Value(_) => vec![],
             Expression::In(e, values) => {
-                let mut fields = e.referenced_fields();
+                let fields = e.referenced_fields();
                 for _ in values {
                     // Values don't contain fields
                 }

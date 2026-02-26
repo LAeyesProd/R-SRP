@@ -28,6 +28,8 @@ default = ["std"]
 std = []
 # Enable deterministic timing (for compliance)
 deterministic = []
+# PQ/hybrid proof envelope support (debug/dev defaults to mock backend in rsrp-pqcrypto)
+pq-proof = ["dep:pqcrypto"]
 
 [dependencies]
 crue-dsl = { package = "rsrp-policy-dsl", version = "0.9.1", path = "../crue-dsl" }
@@ -39,6 +41,7 @@ uuid = { version = "1.7", features = ["v4", "serde"] }
 thiserror = "1.0"
 tracing = "0.1"
 tokio = { version = "1.35", features = ["sync", "rt"] }
+pqcrypto = { package = "rsrp-pqcrypto", version = "0.9.1", path = "../pqcrypto", optional = true }
 
 [dev-dependencies]
 tempfile = "3.8"

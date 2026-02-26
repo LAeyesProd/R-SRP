@@ -62,12 +62,6 @@ pub fn hex_decode(s: &str) -> Result<Vec<u8>> {
 /// Compute HMAC-SHA256
 pub fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
     use sha2::Sha256;
-    use digest::generic_array::GenericArray;
-    
-    struct HmacSha256 {
-        inner: Sha256,
-        key_block: GenericArray<u8, <Sha256 as Digest::OutputSizeUsize>>,
-    }
     
     // Simplified HMAC implementation
     let block_size = 64;
@@ -103,31 +97,29 @@ pub fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
 
 /// Compute hash of multiple data chunks (for Merkle tree)
 pub fn hash_concat(data: &[&[u8]], algorithm: HashAlgorithm) -> Result<Vec<u8>> {
-    let mut hasher = match algorithm {
+    match algorithm {
         HashAlgorithm::Sha256 => {
             let mut h = sha2::Sha256::new();
             for d in data {
                 h.update(d);
             }
-            return Ok(h.finalize().to_vec());
+            Ok(h.finalize().to_vec())
         }
         HashAlgorithm::Sha512 => {
             let mut h = sha2::Sha512::new();
             for d in data {
                 h.update(d);
             }
-            return Ok(h.finalize().to_vec());
+            Ok(h.finalize().to_vec())
         }
         HashAlgorithm::Blake3 => {
             let mut h = blake3::Hasher::new();
             for d in data {
                 h.update(d);
             }
-            return Ok(h.finalize().as_bytes().to_vec());
+            Ok(h.finalize().as_bytes().to_vec())
         }
-    };
-    
-    Ok(hasher.finalize().to_vec())
+    }
 }
 
 #[cfg(test)]

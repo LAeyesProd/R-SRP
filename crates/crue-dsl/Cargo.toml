@@ -1,12 +1,32 @@
-# CRUE DSL Parser and Compiler
-# Compiled declarative rules for Zero-Trust access control
+# RSRP Policy DSL - Declarative rules parser and compiler
+#
+# Compiled declarative rules for access control.
 
 [package]
-name = "crue-dsl"
+name = "rsrp-policy-dsl"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
+description = "Compiled policy DSL for deterministic access-control and proof-oriented rule execution"
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "README.md"
+documentation = "https://docs.rs/rsrp-policy-dsl"
+
+[lib]
+name = "crue_dsl"
+
+[package.metadata.aliases]
+# Future: rsrp-policy-dsl = "crue-dsl"
+
+[features]
+default = ["std"]
+std = []
+# Enable strict validation
+strict = []
 
 [dependencies]
 thiserror = "1.0"

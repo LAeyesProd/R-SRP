@@ -1,8 +1,9 @@
 //! Rule Registry and Built-in Rules
 
 use crate::context::EvaluationContext;
-use crate::decision::{ActionResult, Decision};
+use crate::decision::ActionResult;
 use crate::error::EngineError;
+use crate::ir::{ActionKind, Operator};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -69,15 +70,14 @@ impl Rule {
             _ => return Err(EngineError::TypeMismatch(self.condition.field.clone())),
         };
         
-        // Compare
-        let result = match self.condition.operator.as_str() {
-            ">" => field_num > self.condition.value,
-            "<" => field_num < self.condition.value,
-            ">=" => field_num >= self.condition.value,
-            "<=" => field_num <= self.condition.value,
-            "==" => field_num == self.condition.value,
-            "!=" => field_num != self.condition.value,
-            _ => return Err(EngineError::InvalidOperator(self.condition.operator.clone())),
+        let op = self.condition.operator_typed()?;
+        let result = match op {
+            Operator::Gt => field_num > self.condition.value,
+            Operator::Lt => field_num < self.condition.value,
+            Operator::Gte => field_num >= self.condition.value,
+            Operator::Lte => field_num <= self.condition.value,
+            Operator::Eq => field_num == self.condition.value,
+            Operator::Ne => field_num != self.condition.value,
         };
         
         Ok(result)
@@ -85,8 +85,8 @@ impl Rule {
     
     /// Apply action
     pub fn apply_action(&self, _ctx: &EvaluationContext) -> ActionResult {
-        match self.action.action_type.as_str() {
-            "BLOCK" => {
+        match self.action.action_kind().unwrap_or(ActionKind::Log) {
+            ActionKind::Block => {
                 let mut result = ActionResult::block(
                     self.action.error_code.as_deref().unwrap_or("UNKNOWN"),
                     self.action.message.as_deref().unwrap_or("Access denied"),
@@ -96,20 +96,32 @@ impl Rule {
                 }
                 result
             }
-            "WARN" => {
+            ActionKind::Warn => {
                 ActionResult::warn(
                     self.action.error_code.as_deref().unwrap_or("WARNING"),
                     self.action.message.as_deref().unwrap_or("Warning"),
                 )
             }
-            "REQUIRE_APPROVAL" => {
+            ActionKind::RequireApproval => {
                 ActionResult::approval_required(
                     self.action.error_code.as_deref().unwrap_or("APPROVAL_REQUIRED"),
                     self.action.timeout_minutes.unwrap_or(30),
                 )
             }
-            _ => ActionResult::allow(),
+            ActionKind::Log => ActionResult::allow(),
         }
+    }
+}
+
+impl RuleCondition {
+    pub fn operator_typed(&self) -> Result<Operator, EngineError> {
+        Operator::parse(&self.operator)
+    }
+}
+
+impl RuleAction {
+    pub fn action_kind(&self) -> Result<ActionKind, EngineError> {
+        ActionKind::parse(&self.action_type)
     }
 }
 
@@ -121,12 +133,18 @@ pub struct RuleRegistry {
 }
 
 impl RuleRegistry {
-    /// Create new registry
-    pub fn new() -> Self {
-        let mut registry = RuleRegistry {
+    /// Create an empty registry (without built-in rules).
+    /// Useful for tests that need deterministic "no rule matched" behavior.
+    pub fn empty() -> Self {
+        RuleRegistry {
             rules: Vec::new(),
             by_id: std::collections::HashMap::new(),
-        };
+        }
+    }
+
+    /// Create new registry
+    pub fn new() -> Self {
+        let mut registry = RuleRegistry::empty();
         
         // Load built-in rules from specification
         registry.load_builtin_rules();
@@ -298,7 +316,7 @@ mod tests {
             enabled: true,
         };
         
-        let mut ctx = EvaluationContext::from_request(&crate::EvaluationRequest {
+        let ctx = EvaluationContext::from_request(&crate::EvaluationRequest {
             request_id: "test".to_string(),
             agent_id: "AGENT_001".to_string(),
             agent_org: "DGFiP".to_string(),
@@ -320,5 +338,27 @@ mod tests {
         
         let result = rule.evaluate(&ctx).unwrap();
         assert!(result);
+    }
+
+    #[test]
+    fn test_rule_condition_operator_typed() {
+        let cond = RuleCondition {
+            field: "agent.requests_last_hour".to_string(),
+            operator: ">=".to_string(),
+            value: 50,
+        };
+        assert_eq!(cond.operator_typed().unwrap(), crate::ir::Operator::Gte);
+    }
+
+    #[test]
+    fn test_rule_action_kind_typed() {
+        let action = RuleAction {
+            action_type: "BLOCK".to_string(),
+            error_code: None,
+            message: None,
+            timeout_minutes: None,
+            alert_soc: false,
+        };
+        assert_eq!(action.action_kind().unwrap(), ActionKind::Block);
     }
 }

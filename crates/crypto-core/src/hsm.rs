@@ -49,7 +49,7 @@ pub struct HsmKeyHandle {
 }
 
 /// HSM session
-pub trait HsmSession {
+pub trait HsmSession: Send {
     /// Sign data with key
     fn sign(&mut self, key_handle: &HsmKeyHandle, data: &[u8]) -> Result<Vec<u8>>;
     
@@ -126,7 +126,7 @@ impl HsmSession for SoftHsm {
 pub fn create_hsm_session(config: &HsmConfig) -> Result<Box<dyn HsmSession>> {
     match config.hsm_type {
         HsmType::SoftHSM => Ok(Box::new(SoftHsm::new(config.clone()))),
-        _ => Err(CryptoError::HSMError(format!("HSM type {:?} not implemented", config.hsm_type))),
+        _ => Err(CryptoError::HsmError(format!("HSM type {:?} not implemented", config.hsm_type))),
     }
 }
 
@@ -153,6 +153,11 @@ impl HsmSigner {
     /// Sign data
     pub fn sign(&mut self, data: &[u8]) -> Result<Vec<u8>> {
         self.session.sign(&self.key_handle, data)
+    }
+
+    /// Verify signature (best-effort depending on HSM backend support)
+    pub fn verify(&mut self, data: &[u8], signature: &[u8]) -> Result<bool> {
+        self.session.verify(&self.key_handle, data, signature)
     }
     
     /// Get key metadata
@@ -187,5 +192,22 @@ mod tests {
         let signature = session.sign(&handle, data).unwrap();
         
         assert!(session.verify(&handle, data, &signature).unwrap());
+    }
+
+    #[test]
+    fn test_hsm_signer_soft_hsm_roundtrip() {
+        let config = HsmConfig {
+            hsm_type: HsmType::SoftHSM,
+            connection: "local://softhsm".to_string(),
+            slot: 0,
+            key_label_prefix: "audit".to_string(),
+        };
+
+        let mut signer = HsmSigner::new(config, "audit-key").unwrap();
+        let data = b"daily publication payload";
+        let sig = signer.sign(data).unwrap();
+
+        assert!(signer.verify(data, &sig).unwrap());
+        assert!(!signer.verify(b"tampered", &sig).unwrap());
     }
 }

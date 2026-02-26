@@ -81,7 +81,9 @@ impl Parser {
                 ident.push(c);
                 while let Some(&c) = chars.peek() {
                     if c.is_alphanumeric() || c == '_' {
-                        ident.push(chars.next().unwrap());
+                        if let Some(next_char) = chars.next() {
+                            ident.push(next_char);
+                        }
                     } else {
                         break;
                     }
@@ -120,7 +122,9 @@ impl Parser {
                 num.push(c);
                 while let Some(&c) = chars.peek() {
                     if c.is_ascii_digit() {
-                        num.push(chars.next().unwrap());
+                        if let Some(next_char) = chars.next() {
+                            num.push(next_char);
+                        }
                     } else {
                         break;
                     }
@@ -223,8 +227,14 @@ impl Parser {
                             id,
                             version: format!("{}.{}.{}", version, n, n2),
                             signed: self.match_token(Token::Signed),
-                            when_clause: self.parse_expression()?,
-                            then_clause: self.parse_actions()?,
+                            when_clause: {
+                                self.expect(Token::When)?;
+                                self.parse_expression()?
+                            },
+                            then_clause: {
+                                self.expect(Token::Then)?;
+                                self.parse_actions()?
+                            },
                             metadata: self.parse_metadata()?,
                         });
                     }
@@ -233,8 +243,14 @@ impl Parser {
                     id,
                     version: format!("{}.{}", version, n),
                     signed: self.match_token(Token::Signed),
-                    when_clause: self.parse_expression()?,
-                    then_clause: self.parse_actions()?,
+                    when_clause: {
+                        self.expect(Token::When)?;
+                        self.parse_expression()?
+                    },
+                    then_clause: {
+                        self.expect(Token::Then)?;
+                        self.parse_actions()?
+                    },
                     metadata: self.parse_metadata()?,
                 });
             }

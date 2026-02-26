@@ -15,22 +15,37 @@
 //! - NIST FIPS 204: Kyber (Key Encapsulation)
 //! - NIST FIPS 205: SPHINCS+ (Hash-based signatures)
 
+#[cfg(all(feature = "mock-crypto", feature = "real-crypto"))]
+compile_error!("Enable exactly one of `mock-crypto` or `real-crypto` for rsrp-pqcrypto.");
+
+#[cfg(all(
+    not(debug_assertions),
+    not(feature = "real-crypto")
+))]
+compile_error!(
+    "Release builds require `real-crypto` for rsrp-pqcrypto (mock backend forbidden in release)."
+);
+
 pub mod error;
 pub mod signature;
 pub mod kem;
 pub mod hybrid;
 
 pub use error::PqcError;
-pub use signature::{Dilithium, DilithiumLevel};
-pub use kem::{Kyber, KyberLevel};
+pub use signature::{Dilithium, DilithiumLevel, SignatureProvider, MockProvider};
+pub use kem::{Kyber, KyberLevel, KemProvider, MockKemProvider};
+#[cfg(feature = "real-crypto")]
+pub use signature::OqsProvider;
+#[cfg(feature = "real-crypto")]
+pub use kem::OqsKemProvider;
 pub use hybrid::{HybridSignature, HybridKEM};
 
 /// PQC Algorithm identifiers for serialization
 pub const ALGORITHM_DILITHIUM2: &str = "ML-DSA-44";
 pub const ALGORITHM_DILITHIUM3: &str = "ML-DSA-65";
 pub const ALGORITHM_DILITHIUM5: &str = "ML-DSA-87";
-pub const ALGORITHM_KYBER512: &str = "ML-KEM-768";
-pub const ALGORITHM_KYBER768: &str = "ML-KEM-1024";
+pub const ALGORITHM_KYBER512: &str = "ML-KEM-512";
+pub const ALGORITHM_KYBER768: &str = "ML-KEM-768";
 pub const ALGORITHM_KYBER1024: &str = "ML-KEM-1024";
 
 /// Version information
