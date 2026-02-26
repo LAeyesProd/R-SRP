@@ -3,6 +3,8 @@
 //! Handles RSA-PSS signing and verification of compiled rules
 
 use crate::error::Result;
+use crate::error::DslError;
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use sha2::{Sha256, Digest};
 
 /// Rule signature metadata
@@ -67,23 +69,25 @@ pub fn verify_signature(
     bytecode: &[u8],
     signature: &[u8],
     _key_id: &str,
-    _public_key: &[u8],
+    public_key: &[u8],
 ) -> Result<bool> {
-    // In production, use RSA-PSS verification
-    // This is a placeholder verification
-    
-    // For now, just check signature length
-    if signature.len() < 32 {
+    // Fail-closed verification path: require strict Ed25519 key/signature sizes.
+    if public_key.len() != 32 || signature.len() != 64 {
         return Ok(false);
     }
-    
-    // Compute expected hash
-    let mut hasher = Sha256::new();
-    hasher.update(bytecode);
-    let hash = hasher.finalize();
-    
-    // Compare (simplified - real impl would use RSA-PSS)
-    Ok(signature.starts_with(hash.as_ref()))
+
+    let key_bytes: [u8; 32] = public_key
+        .try_into()
+        .map_err(|_| DslError::SignatureError("Invalid Ed25519 public key length".to_string()))?;
+    let sig_bytes: [u8; 64] = signature
+        .try_into()
+        .map_err(|_| DslError::SignatureError("Invalid Ed25519 signature length".to_string()))?;
+
+    let verifying_key = VerifyingKey::from_bytes(&key_bytes)
+        .map_err(|e| DslError::SignatureError(format!("Invalid Ed25519 public key: {}", e)))?;
+    let parsed_sig = Signature::from_bytes(&sig_bytes);
+
+    Ok(verifying_key.verify(bytecode, &parsed_sig).is_ok())
 }
 
 /// Generate rule source hash for signing
@@ -101,6 +105,7 @@ pub fn verify_source_hash(source: &str, expected_hash: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ed25519_dalek::Signer;
     
     #[test]
     fn test_source_hash() {
@@ -127,5 +132,17 @@ mod tests {
         
         assert!(!signature.is_empty());
         assert_eq!(signer.key_id(), "test-key-001");
+    }
+
+    #[test]
+    fn test_verify_signature_ed25519_valid_and_invalid() {
+        let secret = [7u8; 32];
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&secret);
+        let verifying_key = signing_key.verifying_key();
+        let bytecode = b"compiled-rule-bytecode";
+        let sig = signing_key.sign(bytecode);
+
+        assert!(verify_signature(bytecode, &sig.to_bytes(), "k1", &verifying_key.to_bytes()).unwrap());
+        assert!(!verify_signature(b"tampered", &sig.to_bytes(), "k1", &verifying_key.to_bytes()).unwrap());
     }
 }

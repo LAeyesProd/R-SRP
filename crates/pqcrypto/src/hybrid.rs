@@ -3,6 +3,7 @@
 //! Combines classical cryptography with post-quantum algorithms
 //! to provide security against both classical and quantum attackers.
 
+use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use zeroize::Zeroize;
@@ -68,16 +69,16 @@ impl HybridSignature {
 }
 
 /// Hybrid key pair for signatures
-#[derive(Clone, Serialize, Deserialize, Zeroize)]
+#[derive(Clone, Zeroize)]
 #[zeroize(drop)]
 pub struct HybridKeyPair {
     /// Classical Ed25519 key pair
     pub classical_public: Vec<u8>,
     #[zeroize(skip)]
-    pub classical_secret: Vec<u8>,
+    classical_secret: Vec<u8>,
     /// Post-quantum Dilithium key pair
     pub quantum_public: DilithiumPublicKey,
-    pub quantum_secret: DilithiumSecretKey,
+    quantum_secret: DilithiumSecretKey,
     /// Security level
     #[zeroize(skip)]
     pub level: DilithiumLevel,
@@ -161,18 +162,18 @@ impl HybridKEM {
 }
 
 /// Hybrid key pair for KEM
-#[derive(Clone, Serialize, Deserialize, Zeroize)]
+#[derive(Clone, Zeroize)]
 #[zeroize(drop)]
 pub struct HybridKEMKeyPair {
     /// Classical X25519 public key
     #[zeroize(skip)]
     pub classical_public: Vec<u8>,
     /// Classical X25519 secret key
-    pub classical_secret: Vec<u8>,
+    classical_secret: Vec<u8>,
     /// Post-quantum Kyber public key
     pub quantum_public: KyberPublicKey,
     /// Post-quantum Kyber secret key
-    pub quantum_secret: KyberSecretKey,
+    quantum_secret: KyberSecretKey,
     /// Security level
     #[zeroize(skip)]
     pub level: KyberLevel,
@@ -334,12 +335,8 @@ impl HybridKEMEncapsulator {
         // Quantum encapsulation (Kyber)
         let (shared_quantum, quantum_ct) = self.kyber.encapsulate(&recipient.quantum_public)?;
         
-        // Combine shared secrets
-        let mut combined_secret = vec![0u8; 32];
-        // Simple combination (XOR) - in production use proper KDF
-        for i in 0..32 {
-            combined_secret[i] = classical_ct[i] ^ shared_quantum[i];
-        }
+        // Derive hybrid secret with HKDF over both components.
+        let combined_secret = derive_hybrid_shared_secret(&classical_ct, &shared_quantum)?;
         
         Ok((
             combined_secret,
@@ -397,18 +394,24 @@ impl HybridKEMDecapsulator {
         // Quantum decapsulation (Kyber)
         let shared_quantum = self.kyber.decapsulate(&keypair.quantum_secret, &ciphertext.quantum)?;
         
-        // Combine with classical part
-        let mut combined_secret = vec![0u8; 32];
-        for i in 0..32 {
-            if i < ciphertext.classical.len() {
-                combined_secret[i] = ciphertext.classical[i] ^ shared_quantum[i];
-            } else {
-                combined_secret[i] = shared_quantum[i];
-            }
-        }
-        
-        Ok(combined_secret)
+        derive_hybrid_shared_secret(&ciphertext.classical, &shared_quantum)
     }
+}
+
+fn derive_hybrid_shared_secret(classical_component: &[u8], quantum_component: &[u8]) -> PqcResult<Vec<u8>> {
+    // Context-bound extract+expand to avoid ad-hoc composition issues.
+    let salt = b"rsrp-hybrid-kem-v1";
+    let mut ikm = Vec::with_capacity(2 + classical_component.len() + 2 + quantum_component.len());
+    ikm.extend_from_slice(&(classical_component.len() as u16).to_be_bytes());
+    ikm.extend_from_slice(classical_component);
+    ikm.extend_from_slice(&(quantum_component.len() as u16).to_be_bytes());
+    ikm.extend_from_slice(quantum_component);
+
+    let hk = Hkdf::<sha2::Sha256>::new(Some(salt), &ikm);
+    let mut out = [0u8; 32];
+    hk.expand(b"shared-secret", &mut out)
+        .map_err(|_| PqcError::HybridFailed("HKDF expand failed".into()))?;
+    Ok(out.to_vec())
 }
 
 #[cfg(test)]
@@ -462,5 +465,17 @@ mod tests {
         let shared_2 = decapsulator.decapsulate(&keypair, &ciphertext).unwrap();
         
         assert_eq!(shared_1, shared_2);
+    }
+
+    #[test]
+    fn test_hybrid_kem_rejects_tampered_classical_component() {
+        let encapsulator = HybridKEMEncapsulator::new(KyberLevel::Kyber512);
+        let decapsulator = HybridKEMDecapsulator::new(KyberLevel::Kyber512);
+        let keypair = encapsulator.generate_keypair().unwrap();
+
+        let (shared_1, mut ciphertext) = encapsulator.encapsulate(&keypair).unwrap();
+        ciphertext.classical[0] ^= 0xA5;
+        let shared_2 = decapsulator.decapsulate(&keypair, &ciphertext).unwrap();
+        assert_ne!(shared_1, shared_2);
     }
 }

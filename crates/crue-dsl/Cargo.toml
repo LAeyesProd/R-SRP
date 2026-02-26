@@ -39,6 +39,7 @@ uuid = { version = "1.7", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 tracing = "0.1"
 signature = "2.2"
+ed25519-dalek = "2.1"
 
 [dev-dependencies]
 tempfile = "3.8"
