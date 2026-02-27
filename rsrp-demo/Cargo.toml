@@ -14,8 +14,8 @@ production = ["real-crypto", "rsrp-pqcrypto/production"]
 [dependencies]
 chrono = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
-rsrp-policy-dsl = { version = "0.9.7", path = "../crates/crue-dsl" }
-rsrp-proof-engine = { version = "0.9.7", path = "../crates/crue-engine", features = ["pq-proof"] }
-rsrp-pqcrypto = { version = "0.9.7", path = "../crates/pqcrypto" }
-rsrp-immutable-ledger = { version = "0.9.7", path = "../crates/immutable-logging" }
-crypto-core = { package = "rsrp-security-core", version = "0.9.7", path = "../crates/crypto-core" }
+rsrp-policy-dsl = { version = "0.9.8", path = "../crates/crue-dsl" }
+rsrp-proof-engine = { version = "0.9.8", path = "../crates/crue-engine", features = ["pq-proof"] }
+rsrp-pqcrypto = { version = "0.9.8", path = "../crates/pqcrypto" }
+rsrp-immutable-ledger = { version = "0.9.8", path = "../crates/immutable-logging" }
+crypto-core = { package = "rsrp-security-core", version = "0.9.8", path = "../crates/crypto-core" }
