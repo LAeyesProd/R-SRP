@@ -40,7 +40,7 @@ jobs:
 
       - name: Generate CycloneDX SBOM
         run: |
-          cargo cyclonedx --manifest-path Cargo.toml --all --all-features --format json
+          cargo cyclonedx --manifest-path Cargo.toml --workspace --all-features --format json
           mkdir -p sbom
           find . -type f \( -name "*.cdx.json" -o -name "bom.json" -o -name "*.bom.json" \) \
             -not -path "./target/*" \
@@ -55,11 +55,9 @@ jobs:
           echo "SBOM_ARCHIVE=${ARCHIVE}" >> "${GITHUB_ENV}"
 
       - name: Install Cosign
-        if: github.event_name != 'pull_request'
         uses: sigstore/cosign-installer@v3.7.0
 
       - name: Sign SBOM bundle (keyless)
-        if: github.event_name != 'pull_request'
         run: |
           cosign sign-blob --yes \
             --output-signature "${SBOM_ARCHIVE}.sig" \
@@ -67,7 +65,6 @@ jobs:
             "${SBOM_ARCHIVE}"
 
       - name: Verify SBOM signature
-        if: github.event_name != 'pull_request'
         run: |
           cosign verify-blob \
             --certificate "${SBOM_ARCHIVE}.pem" \
@@ -76,19 +73,7 @@ jobs:
             --certificate-identity-regexp "https://github.com/${{ github.repository }}/.github/workflows/sbom.yml@.*" \
             "${SBOM_ARCHIVE}"
 
-      - name: Upload SBOM artifacts (PR)
-        if: github.event_name == 'pull_request'
-        uses: actions/upload-artifact@v4
-        with:
-          name: signed-sbom-${{ github.sha }}
-          path: |
-            sbom/**
-            ${{ env.SBOM_ARCHIVE }}
-            ${{ env.SBOM_ARCHIVE }}.sha256
-          retention-days: 90
-
       - name: Upload signed SBOM artifacts
-        if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: signed-sbom-${{ github.sha }}

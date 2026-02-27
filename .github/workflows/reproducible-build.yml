@@ -32,25 +32,8 @@ jobs:
       - name: Install real-crypto dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            pkg-config \
-            cmake \
-            clang \
-            llvm \
-            llvm-dev \
-            libclang-dev
-
-          LIBCLANG_SO="$(ldconfig -p | awk '/libclang\.so/{print $NF; exit}')"
-          if [ -z "${LIBCLANG_SO}" ]; then
-            LIBCLANG_SO="$(find /usr/lib -type f -name 'libclang.so*' | head -n 1)"
-          fi
-          if [ -z "${LIBCLANG_SO}" ]; then
-            echo "libclang shared library not found" >&2
-            exit 1
-          fi
-          echo "Resolved libclang: ${LIBCLANG_SO}"
-          echo "LIBCLANG_PATH=$(dirname "${LIBCLANG_SO}")" >> $GITHUB_ENV
+          sudo apt-get install -y cmake clang llvm-dev libclang-dev
+          echo "LIBCLANG_PATH=$(llvm-config --libdir)" >> $GITHUB_ENV
 
       - name: Build real crypto backend
         run: cargo check --locked -p rsrp-pqcrypto --release --no-default-features --features real-crypto
