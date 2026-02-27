@@ -189,9 +189,6 @@ fn warn_if_mock_backend() {
     });
 }
 
-#[cfg(not(feature = "mock-crypto"))]
-fn warn_if_mock_backend() {}
-
 fn assert_backend_selected() {
     #[cfg(all(not(debug_assertions), feature = "mock-crypto"))]
     panic!("rsrp-pqcrypto: mock backend is forbidden in release builds");
@@ -206,6 +203,7 @@ fn active_provider() -> &'static dyn KemProvider {
     }
     #[cfg(all(not(feature = "real-crypto"), feature = "mock-crypto"))]
     {
+        warn_if_mock_backend();
         &MOCK_KEM_PROVIDER
     }
     #[cfg(not(any(feature = "mock-crypto", feature = "real-crypto")))]

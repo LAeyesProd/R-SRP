@@ -7,14 +7,15 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
+use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{env, fs, sync::Arc};
 
 #[derive(Clone)]
 pub struct JwtAuthConfig {
-    decoding_key: DecodingKey,
+    decoding_keys: Arc<HashMap<String, DecodingKey>>,
+    default_kid: String,
     validation: Validation,
 }
 
@@ -154,7 +155,17 @@ fn bearer_token(headers: &HeaderMap) -> Option<&str> {
 }
 
 fn decode_claims(config: &JwtAuthConfig, token: &str) -> Result<JwtClaims, String> {
-    decode::<JwtClaims>(token, &config.decoding_key, &config.validation)
+    let header = decode_header(token).map_err(|e| format!("invalid token header: {e}"))?;
+    if header.alg != Algorithm::EdDSA {
+        return Err("JWT alg must be EdDSA".to_string());
+    }
+    let kid = header.kid.unwrap_or_else(|| config.default_kid.clone());
+    let key = config
+        .decoding_keys
+        .get(&kid)
+        .ok_or_else(|| format!("unknown JWT kid `{kid}`"))?;
+
+    decode::<JwtClaims>(token, key, &config.validation)
         .map(|d| d.claims)
         .map_err(|e| e.to_string())
 }
@@ -205,4 +216,23 @@ pub async fn require_admin(
     next: Next,
 ) -> Response {
     enforce_role(state, request, next, RequiredRole::Admin).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_jwt_algorithm_rejects_hs256_and_rs256() {
+        assert!(parse_jwt_algorithm("HS256").is_err());
+        assert!(parse_jwt_algorithm("RS256").is_err());
+        assert_eq!(parse_jwt_algorithm("EdDSA").unwrap(), Algorithm::EdDSA);
+    }
+
+    #[test]
+    fn test_validation_requires_iss_and_aud() {
+        let v = build_validation(Algorithm::EdDSA, "issuer-a", "audience-a");
+        assert!(v.required_spec_claims.contains("iss"));
+        assert!(v.required_spec_claims.contains("aud"));
+    }
 }

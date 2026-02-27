@@ -178,15 +178,7 @@ impl LogEntryBuilder {
         let timestamp = Utc::now();
         let timestamp_unix = timestamp.timestamp();
         let timestamp_iso = timestamp.to_rfc3339();
-        let entry_id = format!(
-            "le_{}_{}",
-            timestamp_unix,
-            uuid::Uuid::new_v4()
-                .to_string()
-                .split('-')
-                .next()
-                .unwrap_or("unknown")
-        );
+        let entry_id = format!("le_{}_{}", timestamp_unix, uuid::Uuid::new_v4());
 
         let mut entry = LogEntry {
             entry_id,

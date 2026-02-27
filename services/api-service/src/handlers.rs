@@ -6,7 +6,7 @@ use axum::{
     response::Json,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
-use chrono::Timelike;
+use chrono::{NaiveDate, Timelike, Utc};
 use std::net::SocketAddr;
 use std::path::Path as FsPath;
 use std::sync::Arc;
@@ -101,8 +101,8 @@ pub async fn validate_access(
         results_last_query: params.results_last_query.unwrap_or(0),
         account_department: params.account_department,
         allowed_departments: params.allowed_departments.unwrap_or_default(),
-        request_hour: chrono::Utc::now().hour(),
-        is_within_mission_hours: true,
+        request_hour: now.hour(),
+        is_within_mission_hours,
     };
 
     let result = state.engine.evaluate(&request);
@@ -172,8 +172,8 @@ pub async fn validate_access_post(
         results_last_query: payload.results_last_query.unwrap_or(0),
         account_department: payload.account_department,
         allowed_departments: payload.allowed_departments.unwrap_or_default(),
-        request_hour: chrono::Utc::now().hour(),
-        is_within_mission_hours: true,
+        request_hour: now.hour(),
+        is_within_mission_hours,
     };
 
     let result = state.engine.evaluate(&request);
@@ -221,6 +221,7 @@ pub async fn get_daily_root(
     State(state): State<Arc<AppState>>,
     Path(date): Path<String>,
 ) -> Result<Json<DailyRootResponse>, ApiError> {
+    validate_publication_date(&date)?;
     let dir = state.audit_publications_dir.as_ref().ok_or_else(|| {
         ApiError::new(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -254,6 +255,7 @@ pub async fn verify_daily_publication(
     State(state): State<Arc<AppState>>,
     Path(date): Path<String>,
 ) -> Result<Json<DailyPublicationVerifyResponse>, ApiError> {
+    validate_publication_date(&date)?;
     let dir = state.audit_publications_dir.as_ref().ok_or_else(|| {
         ApiError::new(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -1247,5 +1249,12 @@ mod tests {
             tsa_cms_verify_error_status(&TsaCmsVerifyError::Verify("x".to_string())),
             "cms-signature-invalid"
         );
+    }
+
+    #[test]
+    fn test_validate_publication_date_rejects_invalid_format() {
+        let err = validate_publication_date("../etc/passwd").expect_err("invalid date");
+        let response = axum::response::IntoResponse::into_response(err);
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 }

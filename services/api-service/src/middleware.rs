@@ -25,6 +25,9 @@ use tokio::sync::Mutex;
 pub struct IpRateLimiterConfig {
     pub limit_per_window: u32,
     pub window: Duration,
+    pub bucket_ttl: Duration,
+    pub max_buckets: usize,
+    pub ipv6_prefix_len: u8,
 }
 
 impl Default for IpRateLimiterConfig {
@@ -32,13 +35,49 @@ impl Default for IpRateLimiterConfig {
         Self {
             limit_per_window: 100,
             window: Duration::from_secs(60),
+            bucket_ttl: Duration::from_secs(300),
+            max_buckets: 50_000,
+            ipv6_prefix_len: 64,
         }
+    }
+}
+
+impl IpRateLimiterConfig {
+    pub fn from_env() -> Self {
+        let mut cfg = Self::default();
+        if let Ok(v) = std::env::var("RATE_LIMIT_PER_WINDOW") {
+            if let Ok(parsed) = v.parse::<u32>() {
+                cfg.limit_per_window = parsed.max(1);
+            }
+        }
+        if let Ok(v) = std::env::var("RATE_LIMIT_WINDOW_SECONDS") {
+            if let Ok(parsed) = v.parse::<u64>() {
+                cfg.window = Duration::from_secs(parsed.max(1));
+            }
+        }
+        if let Ok(v) = std::env::var("RATE_LIMIT_BUCKET_TTL_SECONDS") {
+            if let Ok(parsed) = v.parse::<u64>() {
+                cfg.bucket_ttl = Duration::from_secs(parsed.max(cfg.window.as_secs()));
+            }
+        }
+        if let Ok(v) = std::env::var("RATE_LIMIT_MAX_BUCKETS") {
+            if let Ok(parsed) = v.parse::<usize>() {
+                cfg.max_buckets = parsed.max(100);
+            }
+        }
+        if let Ok(v) = std::env::var("RATE_LIMIT_IPV6_PREFIX_LEN") {
+            if let Ok(parsed) = v.parse::<u8>() {
+                cfg.ipv6_prefix_len = parsed.min(128);
+            }
+        }
+        cfg
     }
 }
 
 #[derive(Debug, Clone)]
 struct WindowBucket {
     window_started_at: Instant,
+    last_seen_at: Instant,
     hits: u32,
 }
 
@@ -67,12 +106,29 @@ impl IpRateLimiter {
     async fn check_and_count(&self, key: &str) -> Result<(), u64> {
         let now = Instant::now();
         let mut buckets = self.buckets.lock().await;
+        // TTL/LRU eviction to cap memory usage under key-flood attacks.
+        buckets.retain(|_, v| now.duration_since(v.last_seen_at) <= self.config.bucket_ttl);
+        if !buckets.contains_key(key) && buckets.len() >= self.config.max_buckets {
+            let oldest = buckets
+                .iter()
+                .min_by_key(|(_, v)| v.last_seen_at)
+                .map(|(k, _)| k.clone());
+            if let Some(oldest_key) = oldest {
+                buckets.remove(&oldest_key);
+            }
+        }
+        if !buckets.contains_key(key) && buckets.len() >= self.config.max_buckets {
+            return Err(1);
+        }
+
         let bucket = buckets
             .entry(key.to_string())
             .or_insert_with(|| WindowBucket {
                 window_started_at: now,
+                last_seen_at: now,
                 hits: 0,
             });
+        bucket.last_seen_at = now;
 
         if now.duration_since(bucket.window_started_at) >= self.config.window {
             bucket.window_started_at = now;
@@ -192,6 +248,22 @@ pub async fn ip_rate_limit_middleware(
                 response.headers_mut().insert(RETRY_AFTER, v);
             }
             response
+        }
+    }
+}
+
+fn normalize_ip_for_rate_key(ip: IpAddr, ipv6_prefix_len: u8) -> IpAddr {
+    match ip {
+        IpAddr::V4(v4) => IpAddr::V4(v4),
+        IpAddr::V6(v6) => {
+            let prefix = ipv6_prefix_len.min(128);
+            let raw = u128::from_be_bytes(v6.octets());
+            let mask = if prefix == 0 {
+                0
+            } else {
+                u128::MAX << (128 - prefix)
+            };
+            IpAddr::V6(std::net::Ipv6Addr::from((raw & mask).to_be_bytes()))
         }
     }
 }

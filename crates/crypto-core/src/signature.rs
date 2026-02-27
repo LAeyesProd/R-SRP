@@ -42,8 +42,8 @@ impl Default for FipsMode {
 /// Ed25519 key pair with secure memory handling
 #[derive(Zeroize, ZeroizeOnDrop)]
 pub struct Ed25519KeyPair {
-    #[zeroize(skip)]
-    signing_key: SigningKey,
+    // 32-byte Ed25519 private seed (zeroized on drop).
+    secret_seed: [u8; 32],
     #[zeroize(skip)]
     verifying_key: VerifyingKey,
     #[zeroize(skip)]
@@ -58,7 +58,7 @@ impl Ed25519KeyPair {
         let signing_key = SigningKey::from_bytes(&seed);
         let verifying_key = signing_key.verifying_key();
         Ed25519KeyPair {
-            signing_key,
+            secret_seed: seed,
             verifying_key,
             metadata: KeyMetadata {
                 key_id: key_id.unwrap_or_else(|| format!("ed25519-{}", uuid::Uuid::new_v4())),
@@ -99,8 +99,8 @@ impl Ed25519KeyPair {
         fips_mode: FipsMode,
     ) -> std::result::Result<Self, KeyGenerationError> {
         // Try OS entropy first (FIPS-compliant)
-        let signing_key = match Self::generate_with_os_rng() {
-            Ok(key) => key,
+        let secret_seed = match Self::generate_with_os_rng() {
+            Ok(seed) => seed,
             Err(e) => {
                 // Handle entropy failure based on mode
                 match fips_mode {
@@ -117,7 +117,10 @@ impl Ed25519KeyPair {
                             error = %e,
                             "OS entropy unavailable, using fallback RNG (non-FIPS)"
                         );
-                        Self::generate_fallback()
+                        return Err(KeyGenerationError::EntropyError(format!(
+                            "FIPS enabled mode: OS entropy unavailable: {}",
+                            e
+                        )));
                     }
                     FipsMode::Disabled => {
                         // Use fallback silently
@@ -126,10 +129,11 @@ impl Ed25519KeyPair {
                 }
             }
         };
+        let signing_key = SigningKey::from_bytes(&secret_seed);
         let verifying_key = signing_key.verifying_key();
 
         Ok(Ed25519KeyPair {
-            signing_key,
+            secret_seed,
             verifying_key,
             metadata: KeyMetadata {
                 key_id: format!("ed25519-{}", uuid::Uuid::new_v4()),
@@ -142,9 +146,9 @@ impl Ed25519KeyPair {
     }
 
     /// Generate key using OS entropy (FIPS-compliant)
-    fn generate_with_os_rng() -> std::result::Result<SigningKey, KeyGenerationError> {
+    fn generate_with_os_rng() -> std::result::Result<[u8; 32], KeyGenerationError> {
         let mut os_rng = OsRng;
-        Ok(SigningKey::generate(&mut os_rng))
+        Ok(SigningKey::generate(&mut os_rng).to_bytes())
     }
 
     /// Fallback RNG for when OS entropy is unavailable
@@ -153,11 +157,11 @@ impl Ed25519KeyPair {
     ///
     /// Uses StdRng::from_entropy() which seeds from OS entropy,
     /// providing better security than deterministic seeding.
-    fn generate_fallback() -> SigningKey {
+    fn generate_fallback() -> [u8; 32] {
         // Use OS-entropy-seeded StdRng for fallback
         // This is better than deterministic seeding
         let mut rng = StdRng::from_entropy();
-        SigningKey::generate(&mut rng)
+        SigningKey::generate(&mut rng).to_bytes()
     }
 
     /// Generate key with explicit HSM (Hardware Security Module)
@@ -173,7 +177,8 @@ impl Ed25519KeyPair {
 
     /// Sign data
     pub fn sign(&self, data: &[u8]) -> Vec<u8> {
-        let signature = self.signing_key.sign(data);
+        let signing_key = SigningKey::from_bytes(&self.secret_seed);
+        let signature = signing_key.sign(data);
         signature.to_bytes().to_vec()
     }
 
@@ -305,6 +310,7 @@ pub fn verify_rsa_pss(data: &[u8], signature: &[u8], public_key: &[u8]) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    use zeroize::Zeroize;
 
     #[test]
     fn test_ed25519_sign_verify() {
@@ -350,5 +356,14 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("disabled"));
+    }
+
+    #[test]
+    fn test_ed25519_private_seed_zeroize() {
+        let mut key_pair =
+            Ed25519KeyPair::derive_from_secret(b"seed-material", Some("z".to_string()));
+        assert_ne!(key_pair.secret_seed, [0u8; 32]);
+        key_pair.zeroize();
+        assert_eq!(key_pair.secret_seed, [0u8; 32]);
     }
 }

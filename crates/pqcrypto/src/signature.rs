@@ -221,9 +221,6 @@ fn warn_if_mock_backend() {
     });
 }
 
-#[cfg(not(feature = "mock-crypto"))]
-fn warn_if_mock_backend() {}
-
 use crate::error::{PqcError, PqcResult};
 
 fn assert_backend_selected() {
@@ -240,6 +237,7 @@ fn active_provider() -> &'static dyn SignatureProvider {
     }
     #[cfg(all(not(feature = "real-crypto"), feature = "mock-crypto"))]
     {
+        warn_if_mock_backend();
         &MOCK_PROVIDER
     }
     #[cfg(not(any(feature = "mock-crypto", feature = "real-crypto")))]

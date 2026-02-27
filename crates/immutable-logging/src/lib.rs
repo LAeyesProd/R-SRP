@@ -14,13 +14,64 @@ pub mod merkle_service;
 pub mod publication;
 
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use tokio::sync::RwLock;
+use std::{io::Write, path::Path, path::PathBuf, sync::Arc};
+use tokio::sync::{Mutex, RwLock};
 
 /// Immutable log service
 pub struct ImmutableLog {
     chain: Arc<RwLock<chain::LogChain>>,
     merkle: Arc<RwLock<merkle_service::MerkleService>>,
+    wal: Option<Arc<Mutex<WalStore>>>,
+}
+
+struct WalStore {
+    path: PathBuf,
+}
+
+impl WalStore {
+    fn open(path: PathBuf) -> Result<Self, error::LogError> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| error::LogError::PublicationError(e.to_string()))?;
+        }
+        if !path.exists() {
+            std::fs::File::create(&path)
+                .map_err(|e| error::LogError::PublicationError(e.to_string()))?;
+        }
+        Ok(Self { path })
+    }
+
+    fn load_entries(&self) -> Result<Vec<log_entry::LogEntry>, error::LogError> {
+        let raw = std::fs::read_to_string(&self.path)
+            .map_err(|e| error::LogError::PublicationError(e.to_string()))?;
+        let mut out = Vec::new();
+        for (line_no, line) in raw.lines().enumerate() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let entry = serde_json::from_str::<log_entry::LogEntry>(line).map_err(|e| {
+                error::LogError::PublicationError(format!(
+                    "WAL parse error at line {}: {}",
+                    line_no + 1,
+                    e
+                ))
+            })?;
+            out.push(entry);
+        }
+        Ok(out)
+    }
+
+    fn append_entry(&mut self, entry: &log_entry::LogEntry) -> Result<(), error::LogError> {
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)
+            .map_err(|e| error::LogError::PublicationError(e.to_string()))?;
+        let encoded = serde_json::to_string(entry)
+            .map_err(|e| error::LogError::SerializationError(e.to_string()))?;
+        writeln!(file, "{}", encoded).map_err(|e| error::LogError::PublicationError(e.to_string()))
+    }
 }
 
 impl ImmutableLog {
@@ -29,7 +80,30 @@ impl ImmutableLog {
         ImmutableLog {
             chain: Arc::new(RwLock::new(chain::LogChain::new())),
             merkle: Arc::new(RwLock::new(merkle_service::MerkleService::new())),
+            wal: None,
         }
+    }
+
+    /// Create immutable log backed by an append-only WAL file and replay existing entries on boot.
+    pub async fn with_wal_path<P: AsRef<Path>>(path: P) -> Result<Self, error::LogError> {
+        let wal = WalStore::open(path.as_ref().to_path_buf())?;
+        let entries = wal.load_entries()?;
+        let log = ImmutableLog {
+            chain: Arc::new(RwLock::new(chain::LogChain::new())),
+            merkle: Arc::new(RwLock::new(merkle_service::MerkleService::new())),
+            wal: Some(Arc::new(Mutex::new(wal))),
+        };
+
+        if !entries.is_empty() {
+            let mut chain = log.chain.write().await;
+            let mut merkle = log.merkle.write().await;
+            for entry in entries {
+                chain.append_committed(entry.clone()).await?;
+                merkle.add_entry(entry).await?;
+            }
+        }
+
+        Ok(log)
     }
 
     /// Append a new entry
@@ -44,6 +118,11 @@ impl ImmutableLog {
         // Add to merkle tree
         let mut merkle = self.merkle.write().await;
         merkle.add_entry(entry.clone()).await?;
+
+        if let Some(wal) = &self.wal {
+            let mut wal = wal.lock().await;
+            wal.append_entry(&entry)?;
+        }
 
         Ok(entry)
     }
@@ -181,5 +260,30 @@ mod tests {
         let roots = log.hourly_roots_snapshot().await;
         assert_eq!(roots.len(), 1);
         assert_eq!(roots[0].entry_count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_wal_replay_rebuilds_chain() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let wal_path = tmp.path().join("log.wal");
+
+        let log = ImmutableLog::with_wal_path(&wal_path)
+            .await
+            .expect("wal init");
+        let entry = log_entry::LogEntry::new(
+            log_entry::EventType::AccountQuery,
+            "agent-001".to_string(),
+            "org-001".to_string(),
+        )
+        .unwrap();
+        log.append(entry).await.expect("append");
+        assert_eq!(log.entry_count().await, 1);
+        drop(log);
+
+        let reloaded = ImmutableLog::with_wal_path(&wal_path)
+            .await
+            .expect("wal reload");
+        assert_eq!(reloaded.entry_count().await, 1);
+        assert!(reloaded.verify().await.expect("verify"));
     }
 }

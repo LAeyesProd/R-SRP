@@ -17,7 +17,10 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: "1"
   # Security flags
-  RUSTFLAGS: "-D warnings -C target-feature=+crt-static"
+  RUSTFLAGS: "-D warnings"
+  CARGO_INCREMENTAL: "0"
+  CARGO_BUILD_PIPELINING: "false"
+  CARGO_BUILD_JOBS: "1"
   SECURE_PROFILE: "true"
 
 jobs:
@@ -36,7 +39,7 @@ jobs:
           fetch-depth: 0
       
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.93.1
         with:
           components: rustfmt, clippy, rust-src
       
@@ -85,7 +88,7 @@ jobs:
         uses: actions/checkout@v4
       
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.93.1
         with:
           components: rustfmt, clippy
       
@@ -137,7 +140,7 @@ jobs:
         uses: actions/checkout@v4
       
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.93.1
         with:
           components: rustfmt, clippy
       
@@ -145,14 +148,19 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: target
+
+      - name: Sanitize target directory
+        run: |
+          cargo clean
+          cargo fetch --locked
       
       - name: Run tests with coverage
         run: |
-          cargo test --workspace --all-features -- --nocapture --test-threads=1
+          cargo test --workspace --all-features -j 1 -- --nocapture --test-threads=1
       
       - name: Run doc tests
         run: |
-          cargo test --workspace --doc
+          cargo test --workspace --doc --locked -j 1
       
       - name: Run miri (undefined behavior detection)
         continue-on-error: true
@@ -178,7 +186,7 @@ jobs:
         uses: actions/checkout@v4
       
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.93.1
         with:
           targets: x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu
       
@@ -290,7 +298,7 @@ jobs:
       - name: Check license compliance
         run: |
           # Ensure all dependencies have compatible licenses
-          cargo install cargo-deny || true
+          cargo install cargo-deny --version 0.19.0 --locked || true
           cargo deny check advisories || true
           cargo deny check bans || true
           cargo deny check licenses || true

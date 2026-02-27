@@ -13,6 +13,7 @@ mod handlers;
 #[allow(dead_code)]
 mod incident;
 mod middleware;
+mod mission_schedule;
 mod models;
 mod tls;
 
@@ -294,8 +295,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let engine = CrueEngine::new();
     tracing::info!("CRUE Engine initialized with {} rules", engine.rule_count());
 
-    // Initialize logging
-    let logging = immutable_logging::ImmutableLog::new();
+    // Initialize immutable logging (optionally from WAL replay).
+    let immutable_log_wal_path = std::env::var("IMMUTABLE_LOG_WAL_PATH")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .map(PathBuf::from);
+    let logging = if let Some(path) = immutable_log_wal_path.as_ref() {
+        tracing::info!("Immutable log WAL enabled: {}", path.display());
+        immutable_logging::ImmutableLog::with_wal_path(path)
+            .await
+            .map_err(|e| std::io::Error::other(format!("Failed to initialize WAL log: {e}")))?
+    } else {
+        immutable_logging::ImmutableLog::new()
+    };
     let audit_publications_dir = std::env::var("AUDIT_PUBLICATIONS_DIR")
         .ok()
         .filter(|v| !v.trim().is_empty())
