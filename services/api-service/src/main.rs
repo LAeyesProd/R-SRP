@@ -157,7 +157,6 @@ struct AppState {
     audit_tsa_url: Option<String>,
     audit_tsa_trust_store_pem: Option<PathBuf>,
     trusted_proxies: middleware::TrustedProxyConfig,
-    mission_schedule: mission_schedule::MissionScheduleStore,
 }
 
 #[derive(Default)]
@@ -491,18 +490,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         audit_tsa_url,
         audit_tsa_trust_store_pem,
         trusted_proxies: trusted_proxies.clone(),
-        mission_schedule: mission_schedule::MissionScheduleStore::from_env().map_err(|e| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("Failed to initialize mission schedule store: {e}"),
-            )
-        })?,
     });
 
-    let rate_limiter = middleware::IpRateLimiter::new(
-        middleware::IpRateLimiterConfig::from_env(),
-        trusted_proxies,
-    );
+    let rate_limiter =
+        middleware::IpRateLimiter::new(middleware::IpRateLimiterConfig::default(), trusted_proxies);
     if is_production_environment() {
         tracing::warn!(
             "Using in-memory rate limiter. Deploy a distributed backend (e.g., Redis) for multi-replica production."

@@ -10,7 +10,7 @@ use axum::{
 use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::{collections::HashMap, env, fs, sync::Arc};
+use std::{env, fs, sync::Arc};
 
 #[derive(Clone)]
 pub struct JwtAuthConfig {
@@ -26,18 +26,32 @@ impl JwtAuthConfig {
         let algorithm = parse_jwt_algorithm(
             &env::var("JWT_ALGORITHM").unwrap_or_else(|_| "EdDSA".to_string()),
         )?;
-        if algorithm != Algorithm::EdDSA {
-            return Err(
-                "JWT_ALGORITHM must be EdDSA (HS256/RS256 are forbidden in zero-trust mode)"
-                    .to_string(),
-            );
-        }
 
-        let (default_kid, decoding_keys) = read_decoding_keys()?;
+        let decoding_key = match algorithm {
+            Algorithm::HS256 => {
+                let secret = required_env("JWT_SECRET")?;
+                tracing::warn!(
+                    "JWT_ALGORITHM=HS256 configured. Prefer EdDSA/RS256 for zero-trust deployments."
+                );
+                DecodingKey::from_secret(secret.as_bytes())
+            }
+            Algorithm::RS256 => {
+                let pem = read_public_key_pem()?;
+                DecodingKey::from_rsa_pem(&pem).map_err(|e| e.to_string())?
+            }
+            Algorithm::EdDSA => {
+                let pem = read_public_key_pem()?;
+                DecodingKey::from_ed_pem(&pem).map_err(|e| e.to_string())?
+            }
+            other => {
+                return Err(format!(
+                    "Unsupported JWT_ALGORITHM={other:?}. Allowed: HS256, RS256, EdDSA"
+                ));
+            }
+        };
 
         Ok(Arc::new(Self {
-            decoding_keys: Arc::new(decoding_keys),
-            default_kid,
+            decoding_key,
             validation: build_validation(algorithm, &issuer, &audience),
         }))
     }
@@ -53,70 +67,22 @@ fn required_env(name: &str) -> Result<String, String> {
 
 fn parse_jwt_algorithm(raw: &str) -> Result<Algorithm, String> {
     match raw.trim().to_ascii_uppercase().as_str() {
+        "HS256" => Ok(Algorithm::HS256),
+        "RS256" => Ok(Algorithm::RS256),
         "EDDSA" => Ok(Algorithm::EdDSA),
-        "HS256" | "RS256" => {
-            Err("JWT_ALGORITHM must be EdDSA. HS256/RS256 are forbidden by policy".to_string())
-        }
-        other => Err(format!(
-            "Unsupported JWT_ALGORITHM value: {other}. Use EdDSA"
-        )),
+        other => Err(format!("Unsupported JWT_ALGORITHM value: {other}")),
     }
 }
 
-fn read_public_key_pem() -> Result<(String, Vec<u8>), String> {
+fn read_public_key_pem() -> Result<Vec<u8>, String> {
     if let Ok(pem) = env::var("JWT_PUBLIC_KEY_PEM") {
         if !pem.trim().is_empty() {
-            let kid = env::var("JWT_KEY_ID").unwrap_or_else(|_| "default".to_string());
-            return Ok((kid, pem.into_bytes()));
+            return Ok(pem.into_bytes());
         }
     }
 
     let path = required_env("JWT_PUBLIC_KEY_PATH")?;
-    let kid = env::var("JWT_KEY_ID").unwrap_or_else(|_| "default".to_string());
-    let pem =
-        fs::read(&path).map_err(|e| format!("Failed to read JWT public key from {path}: {e}"))?;
-    Ok((kid, pem))
-}
-
-fn read_decoding_keys() -> Result<(String, HashMap<String, DecodingKey>), String> {
-    let mut keys = HashMap::new();
-    let mut default_kid = String::new();
-
-    if let Ok(list) = env::var("JWT_PUBLIC_KEY_PATHS") {
-        for (idx, pair) in list
-            .split(',')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .enumerate()
-        {
-            let (kid, path) = pair.split_once('=').ok_or_else(|| {
-                format!("Invalid JWT_PUBLIC_KEY_PATHS item `{pair}`. Expected `kid=/path/key.pem`")
-            })?;
-            let pem = fs::read(path.trim()).map_err(|e| {
-                format!("Failed to read JWT public key from {}: {}", path.trim(), e)
-            })?;
-            let key = DecodingKey::from_ed_pem(&pem)
-                .map_err(|e| format!("Invalid EdDSA public key {}: {}", path.trim(), e))?;
-            let kid = kid.trim().to_string();
-            if idx == 0 {
-                default_kid = kid.clone();
-            }
-            keys.insert(kid, key);
-        }
-    }
-
-    if keys.is_empty() {
-        let (kid, pem) = read_public_key_pem()?;
-        let key = DecodingKey::from_ed_pem(&pem).map_err(|e| e.to_string())?;
-        default_kid = kid.clone();
-        keys.insert(kid, key);
-    }
-
-    if keys.is_empty() {
-        return Err("No JWT public verification keys configured".to_string());
-    }
-
-    Ok((default_kid, keys))
+    fs::read(&path).map_err(|e| format!("Failed to read JWT public key from {path}: {e}"))
 }
 
 fn build_validation(algorithm: Algorithm, issuer: &str, audience: &str) -> Validation {

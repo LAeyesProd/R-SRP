@@ -5,6 +5,7 @@
 use crate::{CryptoError, KeyMetadata, Result};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
+use subtle::ConstantTimeEq;
 
 /// HSM configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,16 +106,8 @@ impl HsmSignerOps for SoftHsm {
 
 impl HsmVerifierOps for SoftHsm {
     fn verify(&mut self, key_handle: &HsmKeyHandle, data: &[u8], signature: &[u8]) -> Result<bool> {
-        let public_key = self
-            .public_keys
-            .get(&key_handle.key_id)
-            .ok_or_else(|| CryptoError::HsmError("Verification key not found".to_string()))?;
-        crate::signature::verify(
-            data,
-            signature,
-            public_key,
-            crate::SignatureAlgorithm::Ed25519,
-        )
+        let computed = self.sign(key_handle, data)?;
+        Ok(computed.as_slice().ct_eq(signature).into())
     }
 }
 

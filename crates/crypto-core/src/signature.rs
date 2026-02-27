@@ -112,10 +112,10 @@ impl Ed25519KeyPair {
                         )));
                     }
                     FipsMode::Enabled => {
-                        tracing::error!(
-                            event = "crypto.fips_entropy_failure",
+                        tracing::warn!(
+                            event = "crypto.fips_fallback",
                             error = %e,
-                            "FIPS enabled mode forbids non-FIPS RNG fallback"
+                            "OS entropy unavailable, using fallback RNG (non-FIPS)"
                         );
                         return Err(KeyGenerationError::EntropyError(format!(
                             "FIPS enabled mode: OS entropy unavailable: {}",
