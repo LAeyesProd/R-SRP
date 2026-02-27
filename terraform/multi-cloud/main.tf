@@ -38,6 +38,13 @@ variable "admin_authorized_ip_ranges" {
   description = "Authorized CIDR ranges for Kubernetes API access (AKS)"
   type        = list(string)
   default     = ["10.0.0.0/8"]
+
+  validation {
+    condition = length(var.admin_authorized_ip_ranges) > 0 && alltrue([
+      for cidr in var.admin_authorized_ip_ranges : can(cidrhost(cidr, 0)) && cidr != "0.0.0.0/0"
+    ])
+    error_message = "admin_authorized_ip_ranges must contain at least one valid CIDR and must not include 0.0.0.0/0"
+  }
 }
 
 variable "gke_pods_secondary_range_name" {
@@ -193,6 +200,9 @@ resource "google_container_cluster" "rsrp" {
 
   # Disable client certificates - use OAuth instead
   master_auth {
+    username = ""
+    password = ""
+
     client_certificate_config {
       issue_client_certificate = false
     }

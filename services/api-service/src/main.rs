@@ -156,7 +156,9 @@ struct AppState {
     entropy_health_enabled: bool,
     entropy_fail_closed: bool,
     publication_service: Mutex<immutable_logging::publication::PublicationService>,
+    publication_daily_lock: Mutex<()>,
     metrics: ApiMetrics,
+    identity_rate_limiter: Arc<middleware::IdentityRateLimiter>,
     audit_publications_dir: Option<PathBuf>,
     audit_publication_signer: Option<Mutex<AuditPublicationSigner>>,
     audit_tsa_url: Option<String>,
@@ -263,6 +265,10 @@ fn is_production_environment() -> bool {
     .into_iter()
     .flatten()
     .any(|v| matches!(v.to_ascii_lowercase().as_str(), "prod" | "production"))
+}
+
+fn should_expose_public_health_routes(production_env: bool) -> bool {
+    !production_env || parse_bool_env("PUBLIC_HEALTH_ENDPOINTS", false)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -564,6 +570,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
+    if production_env && audit_publication_signer.is_none() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "production requires audit publication signer (set AUDIT_PUBLICATION_SIGNING_PROVIDER=softhsm and related HSM settings)",
+        )
+        .into());
+    }
+
     if audit_publication_signer
         .as_ref()
         .and_then(|m| m.try_lock().ok().map(|g| g.provider_name().to_string()))
@@ -602,6 +616,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
+    let identity_rate_limiter =
+        middleware::IdentityRateLimiter::new(middleware::IdentityRateLimiterConfig::from_env());
+
     let state = Arc::new(AppState {
         engine,
         logging,
@@ -610,7 +627,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         entropy_health_enabled,
         entropy_fail_closed,
         publication_service: Mutex::new(immutable_logging::publication::PublicationService::new()),
+        publication_daily_lock: Mutex::new(()),
         metrics: ApiMetrics::default(),
+        identity_rate_limiter,
         audit_publications_dir,
         audit_publication_signer,
         audit_tsa_url,
@@ -704,8 +723,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ));
     }
 
-    let expose_public_health =
-        !is_production_environment() || parse_bool_env("PUBLIC_HEALTH_ENDPOINTS", false);
+    let expose_public_health = should_expose_public_health_routes(is_production_environment());
     let mut app = Router::new().nest("/api/v1", api_v1);
     if expose_public_health {
         app = app
@@ -719,6 +737,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Apply middleware
         .layer(from_fn(middleware::request_id_middleware))
         .layer(from_fn(middleware::timing_middleware))
+        .layer(from_fn(middleware::security_headers_middleware))
         .layer(cors)
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .layer(tower::limit::ConcurrencyLimitLayer::new(100))
@@ -779,4 +798,150 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use std::sync::{Mutex as StdMutex, OnceLock};
+    use tower::ServiceExt;
+
+    fn env_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| StdMutex::new(()))
+            .lock()
+            .expect("env lock")
+    }
+
+    fn build_health_probe_router(production_env: bool) -> Router {
+        let state = Arc::new(AppState {
+            engine: CrueEngine::new(),
+            logging: immutable_logging::ImmutableLog::new(),
+            mission_schedule: mission_schedule::MissionScheduleStore::default(),
+            entropy_health: tokio::sync::Mutex::new(EntropyHealthState {
+                healthy: true,
+                last_checked_at: None,
+                last_error: None,
+            }),
+            entropy_health_enabled: true,
+            entropy_fail_closed: true,
+            publication_service: tokio::sync::Mutex::new(
+                immutable_logging::publication::PublicationService::new(),
+            ),
+            publication_daily_lock: tokio::sync::Mutex::new(()),
+            metrics: ApiMetrics::default(),
+            identity_rate_limiter: middleware::IdentityRateLimiter::new(
+                middleware::IdentityRateLimiterConfig::default(),
+            ),
+            audit_publications_dir: None,
+            audit_publication_signer: None,
+            audit_tsa_url: None,
+            audit_tsa_trust_store_pem: None,
+            trusted_proxies: middleware::TrustedProxyConfig::default(),
+        });
+
+        let mut app = Router::new();
+        if should_expose_public_health_routes(production_env) {
+            app = app
+                .route("/health", get(handlers::health_check))
+                .route("/ready", get(handlers::ready_check));
+        }
+        app.with_state(state)
+    }
+
+    #[test]
+    fn test_should_expose_public_health_routes_defaults_to_hidden_in_production() {
+        let _guard = env_test_lock();
+        let previous = std::env::var("PUBLIC_HEALTH_ENDPOINTS").ok();
+        std::env::remove_var("PUBLIC_HEALTH_ENDPOINTS");
+
+        assert!(!should_expose_public_health_routes(true));
+        assert!(should_expose_public_health_routes(false));
+
+        match previous {
+            Some(value) => std::env::set_var("PUBLIC_HEALTH_ENDPOINTS", value),
+            None => std::env::remove_var("PUBLIC_HEALTH_ENDPOINTS"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_production_profile_disables_public_health_and_ready_routes() {
+        let _guard = env_test_lock();
+        let previous = std::env::var("PUBLIC_HEALTH_ENDPOINTS").ok();
+        std::env::remove_var("PUBLIC_HEALTH_ENDPOINTS");
+        let app = build_health_probe_router(true);
+
+        let health = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .expect("health request"),
+            )
+            .await
+            .expect("health response");
+        assert_eq!(health.status(), StatusCode::NOT_FOUND);
+
+        let ready = app
+            .oneshot(
+                Request::builder()
+                    .uri("/ready")
+                    .body(Body::empty())
+                    .expect("ready request"),
+            )
+            .await
+            .expect("ready response");
+        assert_eq!(ready.status(), StatusCode::NOT_FOUND);
+
+        match previous {
+            Some(value) => std::env::set_var("PUBLIC_HEALTH_ENDPOINTS", value),
+            None => std::env::remove_var("PUBLIC_HEALTH_ENDPOINTS"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_production_health_opt_in_still_redacts_version() {
+        let _guard = env_test_lock();
+        let prev_public = std::env::var("PUBLIC_HEALTH_ENDPOINTS").ok();
+        let prev_version = std::env::var("HEALTH_EXPOSE_VERSION").ok();
+        let prev_env = std::env::var("ENV").ok();
+        std::env::set_var("PUBLIC_HEALTH_ENDPOINTS", "true");
+        std::env::remove_var("HEALTH_EXPOSE_VERSION");
+        std::env::set_var("ENV", "production");
+        let app = build_health_probe_router(true);
+
+        let health = app
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .expect("health request"),
+            )
+            .await
+            .expect("health response");
+        assert_eq!(health.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(health.into_body(), usize::MAX)
+            .await
+            .expect("health body");
+        let payload: serde_json::Value = serde_json::from_slice(&body).expect("health json");
+        assert_eq!(payload["version"].as_str(), Some("redacted"));
+        assert!(payload.get("status").is_some());
+        assert!(payload.get("timestamp").is_some());
+
+        match prev_public {
+            Some(value) => std::env::set_var("PUBLIC_HEALTH_ENDPOINTS", value),
+            None => std::env::remove_var("PUBLIC_HEALTH_ENDPOINTS"),
+        }
+        match prev_version {
+            Some(value) => std::env::set_var("HEALTH_EXPOSE_VERSION", value),
+            None => std::env::remove_var("HEALTH_EXPOSE_VERSION"),
+        }
+        match prev_env {
+            Some(value) => std::env::set_var("ENV", value),
+            None => std::env::remove_var("ENV"),
+        }
+    }
 }

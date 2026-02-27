@@ -14,6 +14,7 @@ pub mod merkle_service;
 pub mod publication;
 
 use serde::{Deserialize, Serialize};
+use sha2::Digest;
 use std::{io::Write, path::Path, path::PathBuf, sync::Arc};
 use tokio::sync::{Mutex, RwLock};
 
@@ -26,6 +27,14 @@ pub struct ImmutableLog {
 
 struct WalStore {
     path: PathBuf,
+    signing_key: Option<[u8; 32]>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct WalRecord {
+    entry: log_entry::LogEntry,
+    #[serde(default)]
+    signature: Option<String>,
 }
 
 impl WalStore {
@@ -38,7 +47,11 @@ impl WalStore {
             std::fs::File::create(&path)
                 .map_err(|e| error::LogError::PublicationError(e.to_string()))?;
         }
-        Ok(Self { path })
+        let signing_key = std::env::var("IMMUTABLE_LOG_WAL_SIGNING_SECRET")
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .map(|secret| derive_wal_signing_key(secret.as_bytes()));
+        Ok(Self { path, signing_key })
     }
 
     fn load_entries(&self) -> Result<Vec<log_entry::LogEntry>, error::LogError> {
@@ -50,6 +63,33 @@ impl WalStore {
             if line.is_empty() {
                 continue;
             }
+            if let Ok(record) = serde_json::from_str::<WalRecord>(line) {
+                if let Some(signing_key) = &self.signing_key {
+                    let signature = record.signature.clone().ok_or_else(|| {
+                        error::LogError::PublicationError(format!(
+                            "WAL signature missing at line {} (signing is required)",
+                            line_no + 1
+                        ))
+                    })?;
+                    let canonical = serde_json::to_string(&record.entry).map_err(|e| {
+                        error::LogError::SerializationError(format!(
+                            "WAL canonicalization error at line {}: {}",
+                            line_no + 1,
+                            e
+                        ))
+                    })?;
+                    let expected = wal_entry_signature_hex(signing_key, canonical.as_bytes());
+                    if signature != expected {
+                        return Err(error::LogError::PublicationError(format!(
+                            "WAL signature verification failed at line {}",
+                            line_no + 1
+                        )));
+                    }
+                }
+                out.push(record.entry);
+                continue;
+            }
+
             let entry = serde_json::from_str::<log_entry::LogEntry>(line).map_err(|e| {
                 error::LogError::PublicationError(format!(
                     "WAL parse error at line {}: {}",
@@ -57,6 +97,12 @@ impl WalStore {
                     e
                 ))
             })?;
+            if self.signing_key.is_some() {
+                return Err(error::LogError::PublicationError(format!(
+                    "Unsigned WAL line {} is rejected when IMMUTABLE_LOG_WAL_SIGNING_SECRET is set",
+                    line_no + 1
+                )));
+            }
             out.push(entry);
         }
         Ok(out)
@@ -70,8 +116,30 @@ impl WalStore {
             .map_err(|e| error::LogError::PublicationError(e.to_string()))?;
         let encoded = serde_json::to_string(entry)
             .map_err(|e| error::LogError::SerializationError(e.to_string()))?;
-        writeln!(file, "{}", encoded).map_err(|e| error::LogError::PublicationError(e.to_string()))
+        let line = if let Some(signing_key) = &self.signing_key {
+            let signature = wal_entry_signature_hex(signing_key, encoded.as_bytes());
+            let record = WalRecord {
+                entry: entry.clone(),
+                signature: Some(signature),
+            };
+            serde_json::to_string(&record)
+                .map_err(|e| error::LogError::SerializationError(e.to_string()))?
+        } else {
+            encoded
+        };
+        writeln!(file, "{}", line).map_err(|e| error::LogError::PublicationError(e.to_string()))
     }
+}
+
+fn derive_wal_signing_key(secret: &[u8]) -> [u8; 32] {
+    let digest = sha2::Sha256::digest(secret);
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&digest);
+    out
+}
+
+fn wal_entry_signature_hex(key: &[u8; 32], entry: &[u8]) -> String {
+    blake3::keyed_hash(key, entry).to_hex().to_string()
 }
 
 impl ImmutableLog {
@@ -216,6 +284,14 @@ impl Default for LogConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex as StdMutex, OnceLock};
+
+    fn env_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| StdMutex::new(()))
+            .lock()
+            .expect("env lock")
+    }
 
     #[test]
     fn test_default_config() {
@@ -285,5 +361,79 @@ mod tests {
             .expect("wal reload");
         assert_eq!(reloaded.entry_count().await, 1);
         assert!(reloaded.verify().await.expect("verify"));
+    }
+
+    #[tokio::test]
+    async fn test_wal_signed_replay_rebuilds_chain() {
+        let _guard = env_test_lock();
+        let previous = std::env::var("IMMUTABLE_LOG_WAL_SIGNING_SECRET").ok();
+        std::env::set_var(
+            "IMMUTABLE_LOG_WAL_SIGNING_SECRET",
+            "wal-signing-test-secret",
+        );
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let wal_path = tmp.path().join("log-signed.wal");
+
+        let log = ImmutableLog::with_wal_path(&wal_path)
+            .await
+            .expect("wal init");
+        let entry = log_entry::LogEntry::new(
+            log_entry::EventType::AccountQuery,
+            "agent-001".to_string(),
+            "org-001".to_string(),
+        )
+        .unwrap();
+        log.append(entry).await.expect("append");
+        drop(log);
+
+        let reloaded = ImmutableLog::with_wal_path(&wal_path)
+            .await
+            .expect("wal reload");
+        assert_eq!(reloaded.entry_count().await, 1);
+
+        match previous {
+            Some(value) => std::env::set_var("IMMUTABLE_LOG_WAL_SIGNING_SECRET", value),
+            None => std::env::remove_var("IMMUTABLE_LOG_WAL_SIGNING_SECRET"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_wal_signed_replay_rejects_tampering() {
+        let _guard = env_test_lock();
+        let previous = std::env::var("IMMUTABLE_LOG_WAL_SIGNING_SECRET").ok();
+        std::env::set_var(
+            "IMMUTABLE_LOG_WAL_SIGNING_SECRET",
+            "wal-signing-test-secret",
+        );
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let wal_path = tmp.path().join("log-tampered.wal");
+
+        let log = ImmutableLog::with_wal_path(&wal_path)
+            .await
+            .expect("wal init");
+        let entry = log_entry::LogEntry::new(
+            log_entry::EventType::AccountQuery,
+            "agent-001".to_string(),
+            "org-001".to_string(),
+        )
+        .unwrap();
+        log.append(entry).await.expect("append");
+        drop(log);
+
+        let raw = std::fs::read_to_string(&wal_path).expect("read wal");
+        let mut lines: Vec<String> = raw.lines().map(|l| l.to_string()).collect();
+        let mut record: serde_json::Value =
+            serde_json::from_str(&lines[0]).expect("parse signed wal line");
+        record["signature"] = serde_json::Value::String("00deadbeef".to_string());
+        lines[0] = serde_json::to_string(&record).expect("serialize tampered wal line");
+        std::fs::write(&wal_path, lines.join("\n")).expect("write wal");
+
+        let reload = ImmutableLog::with_wal_path(&wal_path).await;
+        assert!(reload.is_err());
+
+        match previous {
+            Some(value) => std::env::set_var("IMMUTABLE_LOG_WAL_SIGNING_SECRET", value),
+            None => std::env::remove_var("IMMUTABLE_LOG_WAL_SIGNING_SECRET"),
+        }
     }
 }

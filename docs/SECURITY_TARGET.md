@@ -93,6 +93,7 @@ Pipeline evidence:
 - `.github/workflows/sbom.yml`
 - `.github/workflows/reproducible-build.yml`
 - `.github/workflows/signing.yml`
+- `.github/workflows/fuzz-evidence.yml`
 
 ## 9. Residual Risks
 

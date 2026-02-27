@@ -48,6 +48,7 @@ Required passing evidence:
 - Merkle domain-separation and second-preimage-resistance tests.
 - Zeroization tests for key lifecycle paths.
 - Entropy startup and runtime health-check tests.
+- Fuzz campaign evidence for `dsl_parser`, `proof_envelope_decode`, `log_entry_deserialize` including duration/corpus/crash metrics.
 
 Minimum command pack:
 
@@ -79,6 +80,7 @@ Pipeline evidence:
 - SBOM artifacts and checksums
 - Signature and provenance attestations
 - Reproducible build comparison report
+- Fuzz campaign artifact (`fuzz-evidence.json` + per-target logs)
 
 ## 4. Control-to-Evidence Mapping
 
@@ -94,6 +96,7 @@ Required workflow evidence:
 - `.github/workflows/sbom.yml`
 - `.github/workflows/signing.yml`
 - `.github/workflows/reproducible-build.yml`
+- `.github/workflows/fuzz-evidence.yml`
 
 Required outputs:
 - `cargo deny` and `cargo audit` reports.

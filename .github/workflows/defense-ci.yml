@@ -113,12 +113,13 @@ jobs:
           cargo install cargo-geiger || true
       
       # Fuzzing setup
-      - name: Run fuzz tests
+      - name: Run fuzz tests and collect evidence
         continue-on-error: true
         run: |
-          # Check if fuzzing targets exist
           if [ -d "fuzz" ]; then
-            cargo fuzz run fuzz_target_1 || true
+            export FUZZ_DURATION_SECONDS=120
+            export FUZZ_FAIL_ON_CRASH=0
+            bash scripts/run_fuzz_evidence.sh || true
           fi
       
       # Geiger: Check unsafe code
@@ -139,7 +140,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: security-test-results
-          path: geiger.json
+          path: |
+            geiger.json
+            fuzz/evidence/**
           retention-days: 7
 
   # Phase 3: Unit & Integration Tests

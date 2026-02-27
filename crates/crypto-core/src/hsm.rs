@@ -6,6 +6,7 @@ use crate::{CryptoError, KeyMetadata, Result};
 use ed25519_dalek::{Signature as Ed25519Signature, Verifier as _, VerifyingKey};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroize;
 
 /// HSM configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,6 +101,7 @@ impl HsmSignerOps for SoftHsm {
         seed.copy_from_slice(key_data);
         let key =
             crate::signature::Ed25519KeyPair::from_seed(seed, Some(key_handle.key_id.clone()));
+        seed.zeroize();
         Ok(key.sign(data))
     }
 }
@@ -142,8 +144,12 @@ impl HsmSession for SoftHsm {
         let mut seed = [0u8; 32];
         seed.copy_from_slice(&key_data);
         let key = crate::signature::Ed25519KeyPair::from_seed(seed, Some(key_id.to_string()));
+        seed.zeroize();
         self.public_keys
             .insert(key_id.to_string(), key.verifying_key());
+        if let Some(mut old) = self.keys.remove(key_id) {
+            old.zeroize();
+        }
         self.keys.insert(key_id.to_string(), key_data);
 
         Ok(HsmKeyHandle {
@@ -162,8 +168,12 @@ impl HsmSession for SoftHsm {
         let mut seed = [0u8; 32];
         seed.copy_from_slice(key_data);
         let key = crate::signature::Ed25519KeyPair::from_seed(seed, Some(key_id.to_string()));
+        seed.zeroize();
         self.public_keys
             .insert(key_id.to_string(), key.verifying_key());
+        if let Some(mut old) = self.keys.remove(key_id) {
+            old.zeroize();
+        }
         self.keys.insert(key_id.to_string(), key_data.to_vec());
 
         Ok(HsmKeyHandle {
@@ -174,8 +184,20 @@ impl HsmSession for SoftHsm {
     }
 
     fn close(&mut self) {
+        for key in self.keys.values_mut() {
+            key.zeroize();
+        }
+        for public_key in self.public_keys.values_mut() {
+            public_key.zeroize();
+        }
         self.keys.clear();
         self.public_keys.clear();
+    }
+}
+
+impl Drop for SoftHsm {
+    fn drop(&mut self) {
+        self.close();
     }
 }
 

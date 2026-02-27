@@ -17,6 +17,7 @@ pub struct JwtAuthConfig {
     decoding_keys: Arc<HashMap<String, DecodingKey>>,
     default_kid: String,
     validation: Validation,
+    max_expiry_seconds: usize,
 }
 
 impl JwtAuthConfig {
@@ -36,6 +37,11 @@ impl JwtAuthConfig {
             .ok()
             .filter(|v| !v.trim().is_empty())
             .unwrap_or_else(|| "default".to_string());
+        let max_expiry_seconds = env::var("JWT_MAX_EXPIRY_SECONDS")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .map(|v| v.max(1))
+            .unwrap_or(3600);
         let mut keys = HashMap::new();
         keys.insert(default_kid.clone(), decoding_key);
 
@@ -43,6 +49,7 @@ impl JwtAuthConfig {
             decoding_keys: Arc::new(keys),
             default_kid,
             validation: build_validation(algorithm, &issuer, &audience),
+            max_expiry_seconds,
         }))
     }
 }
@@ -79,7 +86,9 @@ fn read_public_key_pem() -> Result<Vec<u8>, String> {
 fn build_validation(algorithm: Algorithm, issuer: &str, audience: &str) -> Validation {
     let mut validation = Validation::new(algorithm);
     validation.validate_exp = true;
+    validation.validate_nbf = true;
     validation.required_spec_claims.insert("exp".to_string());
+    validation.required_spec_claims.insert("nbf".to_string());
     validation.required_spec_claims.insert("iss".to_string());
     validation.required_spec_claims.insert("aud".to_string());
     validation.set_issuer(&[issuer]);
@@ -99,6 +108,7 @@ pub struct JwtClaims {
     pub sub: String,
     pub role: String,
     pub exp: usize,
+    pub nbf: usize,
     pub iat: Option<usize>,
     pub iss: Option<String>,
     pub aud: Option<JwtAudience>,
@@ -156,9 +166,22 @@ fn decode_claims(config: &JwtAuthConfig, token: &str) -> Result<JwtClaims, Strin
         .get(&kid)
         .ok_or_else(|| format!("unknown JWT kid `{kid}`"))?;
 
-    decode::<JwtClaims>(token, key, &config.validation)
+    let claims = decode::<JwtClaims>(token, key, &config.validation)
         .map(|d| d.claims)
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    validate_claim_lifetime(&claims, config.max_expiry_seconds)?;
+    Ok(claims)
+}
+
+fn validate_claim_lifetime(claims: &JwtClaims, max_expiry_seconds: usize) -> Result<(), String> {
+    if claims.exp <= claims.nbf {
+        return Err("invalid token lifetime: exp must be greater than nbf".to_string());
+    }
+    let lifetime = claims.exp - claims.nbf;
+    if lifetime > max_expiry_seconds {
+        return Err("token lifetime exceeds maximum allowed validity".to_string());
+    }
+    Ok(())
 }
 
 async fn enforce_role(
@@ -225,5 +248,34 @@ mod tests {
         let v = build_validation(Algorithm::EdDSA, "issuer-a", "audience-a");
         assert!(v.required_spec_claims.contains("iss"));
         assert!(v.required_spec_claims.contains("aud"));
+        assert!(v.required_spec_claims.contains("nbf"));
+    }
+
+    #[test]
+    fn test_validate_claim_lifetime_rejects_excess_duration() {
+        let claims = JwtClaims {
+            sub: "agent".to_string(),
+            role: "AGENT".to_string(),
+            exp: 10_000,
+            nbf: 100,
+            iat: Some(100),
+            iss: Some("issuer-a".to_string()),
+            aud: Some(JwtAudience::One("audience-a".to_string())),
+        };
+        assert!(validate_claim_lifetime(&claims, 3600).is_err());
+    }
+
+    #[test]
+    fn test_validate_claim_lifetime_accepts_short_duration() {
+        let claims = JwtClaims {
+            sub: "agent".to_string(),
+            role: "AGENT".to_string(),
+            exp: 1_100,
+            nbf: 100,
+            iat: Some(100),
+            iss: Some("issuer-a".to_string()),
+            aud: Some(JwtAudience::One("audience-a".to_string())),
+        };
+        assert!(validate_claim_lifetime(&claims, 3600).is_ok());
     }
 }

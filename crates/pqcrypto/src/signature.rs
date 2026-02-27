@@ -445,8 +445,11 @@ fn expand_hash(level: DilithiumLevel, domain: &[u8], parts: &[&[u8]], out_len: u
 mod tests {
     use super::*;
 
+    // Non-production profile coverage: ML-DSA-44 vectors are retained for regression depth,
+    // but must not be interpreted as production-profile evidence.
     #[test]
-    fn test_dilithium_key_sizes() {
+    #[cfg(not(feature = "production"))]
+    fn test_non_production_profile_dilithium2_key_sizes() {
         let dilithium2 = Dilithium::new(DilithiumLevel::Dilithium2);
         let (public_key, secret_key) = dilithium2.generate_keypair().unwrap();
         let signature = dilithium2.sign(&secret_key, b"size-check").unwrap();
@@ -457,7 +460,8 @@ mod tests {
     }
 
     #[test]
-    fn test_dilithium_sign_verify() {
+    #[cfg(not(feature = "production"))]
+    fn test_non_production_profile_dilithium2_sign_verify() {
         let dilithium = Dilithium::new(DilithiumLevel::Dilithium2);
         let (public_key, secret_key) = dilithium.generate_keypair().unwrap();
 
@@ -469,10 +473,31 @@ mod tests {
     }
 
     #[test]
-    fn test_dilithium_verify_rejects_tampered_message() {
+    #[cfg(not(feature = "production"))]
+    fn test_non_production_profile_dilithium2_rejects_tampered_message() {
         let dilithium = Dilithium::new(DilithiumLevel::Dilithium2);
         let (public_key, secret_key) = dilithium.generate_keypair().unwrap();
         let sig = dilithium.sign(&secret_key, b"alpha").unwrap();
+        assert!(!dilithium.verify(&public_key, b"beta", &sig).unwrap());
+    }
+
+    #[test]
+    fn test_production_profile_dilithium3_sign_verify() {
+        let dilithium = Dilithium::new(DilithiumLevel::Dilithium3);
+        let (public_key, secret_key) = dilithium.generate_keypair().unwrap();
+
+        let message = b"production-profile-ml-dsa-65";
+        let signature = dilithium.sign(&secret_key, message).unwrap();
+
+        assert!(dilithium.verify(&public_key, message, &signature).unwrap());
+    }
+
+    #[test]
+    fn test_production_profile_dilithium3_rejects_tampered_message() {
+        let dilithium = Dilithium::new(DilithiumLevel::Dilithium3);
+        let (public_key, secret_key) = dilithium.generate_keypair().unwrap();
+        let sig = dilithium.sign(&secret_key, b"alpha").unwrap();
+
         assert!(!dilithium.verify(&public_key, b"beta", &sig).unwrap());
     }
 }

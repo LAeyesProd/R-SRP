@@ -425,8 +425,11 @@ fn expand_hash(level: KyberLevel, domain: &[u8], parts: &[&[u8]], out_len: usize
 mod tests {
     use super::*;
 
+    // Non-production profile coverage: ML-KEM-512 vectors are retained for regression depth,
+    // but must not be interpreted as production-profile evidence.
     #[test]
-    fn test_kyber_key_sizes() {
+    #[cfg(not(feature = "production"))]
+    fn test_non_production_profile_kyber512_key_sizes() {
         let kyber512 = Kyber::new(KyberLevel::Kyber512);
         assert_eq!(kyber512.level.public_key_size(), 800);
         assert_eq!(kyber512.level.secret_key_size(), 1632);
@@ -435,8 +438,20 @@ mod tests {
     }
 
     #[test]
-    fn test_kyber_kem() {
+    #[cfg(not(feature = "production"))]
+    fn test_non_production_profile_kyber512_kem_roundtrip() {
         let kyber = Kyber::new(KyberLevel::Kyber512);
+        let (public_key, secret_key) = kyber.generate_keypair().unwrap();
+
+        let (shared_secret_1, ciphertext) = kyber.encapsulate(&public_key).unwrap();
+        let shared_secret_2 = kyber.decapsulate(&secret_key, &ciphertext).unwrap();
+
+        assert_eq!(shared_secret_1, shared_secret_2);
+    }
+
+    #[test]
+    fn test_production_profile_kyber768_kem_roundtrip() {
+        let kyber = Kyber::new(KyberLevel::Kyber768);
         let (public_key, secret_key) = kyber.generate_keypair().unwrap();
 
         let (shared_secret_1, ciphertext) = kyber.encapsulate(&public_key).unwrap();

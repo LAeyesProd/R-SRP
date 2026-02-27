@@ -91,6 +91,12 @@ jobs:
           set -euo pipefail
           cargo test -p rsrp-security-core --locked entropy::tests::test_entropy_health_check_reports_ok -- --nocapture
 
+      - name: Enforce production health/readiness leak controls
+        run: |
+          set -euo pipefail
+          cargo test -p api-service --locked tests::test_production_ -- --nocapture
+          cargo test -p api-service --locked handlers::tests::test_health_check_redacts_version_in_production_even_for_debug_builds -- --nocapture
+
       - name: Ensure no mock backend in production feature graph
         run: |
           set -euo pipefail

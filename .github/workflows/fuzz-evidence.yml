@@ -1,0 +1,62 @@
+name: Fuzz Evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration_seconds:
+        description: "Fuzz duration per target (seconds)"
+        required: true
+        default: "600"
+      fail_on_crash:
+        description: "Fail job when crashes are found (true/false)"
+        required: true
+        default: "true"
+  schedule:
+    - cron: "0 4 * * 0"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fuzz-campaign:
+    name: Generate fuzz campaign evidence
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.90.0
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Run fuzz campaign and generate evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          duration="${{ github.event.inputs.duration_seconds }}"
+          fail_on_crash="${{ github.event.inputs.fail_on_crash }}"
+          if [[ -z "${duration}" ]]; then
+            duration="600"
+          fi
+          if [[ -z "${fail_on_crash}" ]]; then
+            fail_on_crash="true"
+          fi
+          export FUZZ_DURATION_SECONDS="${duration}"
+          if [[ "${fail_on_crash}" == "true" ]]; then
+            export FUZZ_FAIL_ON_CRASH=1
+          else
+            export FUZZ_FAIL_ON_CRASH=0
+          fi
+          bash scripts/run_fuzz_evidence.sh
+
+      - name: Upload fuzz evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-evidence-${{ github.sha }}
+          path: fuzz/evidence/**
+          retention-days: 90

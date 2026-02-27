@@ -45,17 +45,12 @@ pub struct ValidateParams {
     #[serde(default)]
     pub result_limit: Option<u32>,
     #[serde(default)]
-    pub requests_last_hour: Option<u32>,
-    #[serde(default)]
-    pub requests_last_24h: Option<u32>,
-    #[serde(default)]
     pub results_last_query: Option<u32>,
     #[serde(default)]
     pub account_department: Option<String>,
     #[serde(default)]
     pub allowed_departments: Option<Vec<u32>>,
-    #[serde(default)]
-    pub legal_basis: Option<String>,
+    pub legal_basis: String,
 }
 
 /// Validation request (POST)
@@ -77,10 +72,6 @@ pub struct ValidationRequest {
     pub export_format: Option<String>,
     #[serde(default)]
     pub result_limit: Option<u32>,
-    #[serde(default)]
-    pub requests_last_hour: Option<u32>,
-    #[serde(default)]
-    pub requests_last_24h: Option<u32>,
     #[serde(default)]
     pub results_last_query: Option<u32>,
     #[serde(default)]

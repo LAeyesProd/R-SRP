@@ -38,11 +38,30 @@ pub async fn health_check() -> Json<HealthResponse> {
 }
 
 fn should_expose_health_version(debug_build: bool) -> bool {
+    if std::env::var("HEALTH_EXPOSE_VERSION")
+        .ok()
+        .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
+    {
+        return true;
+    }
+
+    if is_production_environment() {
+        return false;
+    }
+
     debug_build
-        || std::env::var("HEALTH_EXPOSE_VERSION")
-            .ok()
-            .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
-            .unwrap_or(false)
+}
+
+fn is_production_environment() -> bool {
+    [
+        std::env::var("ENV").ok(),
+        std::env::var("APP_ENV").ok(),
+        std::env::var("RUST_ENV").ok(),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|v| matches!(v.to_ascii_lowercase().as_str(), "prod" | "production"))
 }
 
 /// Readiness check endpoint - confirms service can handle requests
@@ -92,21 +111,32 @@ pub async fn validate_access(
 ) -> Result<Json<ValidationResponse>, ApiError> {
     validate_get_request(&params)?;
     tracing::debug!("Validating access for agent: {}", params.agent_id);
+    if state.engine.rule_count() == 0 {
+        return Err(ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "CRUE has no active policy rules; fail-closed deny",
+        ));
+    }
     let now = Utc::now();
     let is_within_mission_hours = state
         .mission_schedule
         .is_within_mission_hours(params.mission_id.as_deref(), now);
+    let identity_obs = state
+        .identity_rate_limiter
+        .observe_identity(&params.agent_id)
+        .await
+        .map_err(|retry_after_secs| {
+            ApiError::new(
+                StatusCode::TOO_MANY_REQUESTS,
+                format!("identity rate limit exceeded; retry_after_seconds={retry_after_secs}"),
+            )
+        })?;
     let ip_address = middleware::resolve_client_ip(
         &headers,
         connect_info.as_ref().map(|ci| ci.0.ip()),
         &state.trusted_proxies,
     );
-    let legal_basis = derive_legal_basis(
-        params.legal_basis.as_deref(),
-        params.query_type.as_deref(),
-        params.mission_type.as_deref(),
-        Some(params.agent_org.as_str()),
-    )?;
+    let legal_basis = derive_legal_basis(Some(params.legal_basis.as_str()))?;
     let user_agent = headers
         .get(USER_AGENT)
         .and_then(|v| v.to_str().ok())
@@ -123,8 +153,8 @@ pub async fn validate_access(
         justification: params.justification,
         export_format: params.export_format,
         result_limit: params.result_limit,
-        requests_last_hour: params.requests_last_hour.unwrap_or(0),
-        requests_last_24h: params.requests_last_24h.unwrap_or(0),
+        requests_last_hour: identity_obs.requests_last_hour,
+        requests_last_24h: identity_obs.requests_last_24h,
         results_last_query: params.results_last_query.unwrap_or(0),
         account_department: params.account_department,
         allowed_departments: params.allowed_departments.unwrap_or_default(),
@@ -132,7 +162,13 @@ pub async fn validate_access(
         is_within_mission_hours,
     };
 
-    let result = state.engine.evaluate(&request);
+    let mut result = state.engine.evaluate(&request);
+    if matches!(result.decision, crue_engine::decision::Decision::Allow) && result.rule_id.is_none()
+    {
+        result.decision = crue_engine::decision::Decision::Block;
+        result.error_code = Some("CRUE_FAIL_CLOSED_NO_MATCH".to_string());
+        result.message = Some("No matching policy rule; fail-closed deny".to_string());
+    }
     state.record_validation_metrics(result.decision, result.evaluation_time_ms);
     record_validation_decision_audit(
         &state,
@@ -165,21 +201,32 @@ pub async fn validate_access_post(
 ) -> Result<Json<ValidationResponse>, ApiError> {
     validate_post_request(&payload)?;
     tracing::debug!("Validating access for agent: {}", payload.agent_id);
+    if state.engine.rule_count() == 0 {
+        return Err(ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "CRUE has no active policy rules; fail-closed deny",
+        ));
+    }
     let now = Utc::now();
     let is_within_mission_hours = state
         .mission_schedule
         .is_within_mission_hours(payload.mission_id.as_deref(), now);
+    let identity_obs = state
+        .identity_rate_limiter
+        .observe_identity(&payload.agent_id)
+        .await
+        .map_err(|retry_after_secs| {
+            ApiError::new(
+                StatusCode::TOO_MANY_REQUESTS,
+                format!("identity rate limit exceeded; retry_after_seconds={retry_after_secs}"),
+            )
+        })?;
     let ip_address = middleware::resolve_client_ip(
         &headers,
         connect_info.as_ref().map(|ci| ci.0.ip()),
         &state.trusted_proxies,
     );
-    let legal_basis = derive_legal_basis(
-        Some(payload.legal_basis.as_str()),
-        payload.query_type.as_deref(),
-        payload.mission_type.as_deref(),
-        Some(payload.agent_org.as_str()),
-    )?;
+    let legal_basis = derive_legal_basis(Some(payload.legal_basis.as_str()))?;
     let user_agent = headers
         .get(USER_AGENT)
         .and_then(|v| v.to_str().ok())
@@ -198,8 +245,8 @@ pub async fn validate_access_post(
         justification: payload.justification,
         export_format: payload.export_format,
         result_limit: payload.result_limit,
-        requests_last_hour: payload.requests_last_hour.unwrap_or(0),
-        requests_last_24h: payload.requests_last_24h.unwrap_or(0),
+        requests_last_hour: identity_obs.requests_last_hour,
+        requests_last_24h: identity_obs.requests_last_24h,
         results_last_query: payload.results_last_query.unwrap_or(0),
         account_department: payload.account_department,
         allowed_departments: payload.allowed_departments.unwrap_or_default(),
@@ -207,7 +254,13 @@ pub async fn validate_access_post(
         is_within_mission_hours,
     };
 
-    let result = state.engine.evaluate(&request);
+    let mut result = state.engine.evaluate(&request);
+    if matches!(result.decision, crue_engine::decision::Decision::Allow) && result.rule_id.is_none()
+    {
+        result.decision = crue_engine::decision::Decision::Block;
+        result.error_code = Some("CRUE_FAIL_CLOSED_NO_MATCH".to_string());
+        result.message = Some("No matching policy rule; fail-closed deny".to_string());
+    }
     state.record_validation_metrics(result.decision, result.evaluation_time_ms);
     record_validation_decision_audit(
         &state,
@@ -412,6 +465,7 @@ pub async fn verify_daily_publication(
 pub async fn publish_daily(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<DailyPublishResponse>, ApiError> {
+    let _publish_guard = state.publication_daily_lock.lock().await;
     let dir = state.audit_publications_dir.as_ref().ok_or_else(|| {
         ApiError::new(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -832,11 +886,7 @@ fn validate_get_request(params: &ValidateParams) -> Result<(), ApiError> {
         params.account_department.as_deref(),
         MAX_ACCOUNT_DEPARTMENT_LEN,
     )?;
-    validate_optional_field_len(
-        "legal_basis",
-        params.legal_basis.as_deref(),
-        MAX_LEGAL_BASIS_LEN,
-    )?;
+    validate_required_field_len("legal_basis", &params.legal_basis, MAX_LEGAL_BASIS_LEN)?;
     validate_allowed_departments_len(params.allowed_departments.as_deref())?;
     Ok(())
 }
@@ -895,37 +945,11 @@ fn normalize_legal_basis(value: &str) -> Result<String, ApiError> {
     ))
 }
 
-fn derive_legal_basis(
-    provided: Option<&str>,
-    query_type: Option<&str>,
-    mission_type: Option<&str>,
-    agent_org: Option<&str>,
-) -> Result<String, ApiError> {
-    if let Some(basis) = provided {
-        if !basis.trim().is_empty() {
-            return normalize_legal_basis(basis);
-        }
-    }
-
-    let query_type = query_type.unwrap_or_default().to_ascii_uppercase();
-    if query_type.contains("EXPORT") {
-        return Ok("LEGAL_OBLIGATION".to_string());
-    }
-
-    let mission_type = mission_type.unwrap_or_default().to_ascii_uppercase();
-    if mission_type.contains("PUBLIC")
-        || mission_type.contains("GOV")
-        || mission_type.contains("FISCAL")
-    {
-        return Ok("PUBLIC_TASK".to_string());
-    }
-
-    let agent_org = agent_org.unwrap_or_default().to_ascii_uppercase();
-    if agent_org.contains("DGFIP") || agent_org.contains("MINIST") || agent_org.contains("STATE") {
-        return Ok("PUBLIC_TASK".to_string());
-    }
-
-    Ok("LEGITIMATE_INTEREST".to_string())
+fn derive_legal_basis(provided: Option<&str>) -> Result<String, ApiError> {
+    let basis = provided.ok_or_else(|| {
+        ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, "legal_basis is required")
+    })?;
+    normalize_legal_basis(basis)
 }
 
 async fn record_validation_decision_audit(
@@ -1043,6 +1067,26 @@ mod tests {
         assert!(should_expose_health_version(false));
 
         match previous {
+            Some(value) => std::env::set_var("HEALTH_EXPOSE_VERSION", value),
+            None => std::env::remove_var("HEALTH_EXPOSE_VERSION"),
+        }
+    }
+
+    #[test]
+    fn test_health_check_redacts_version_in_production_even_for_debug_builds() {
+        let _guard = env_test_lock();
+        let previous = std::env::var("ENV").ok();
+        let expose_previous = std::env::var("HEALTH_EXPOSE_VERSION").ok();
+        std::env::set_var("ENV", "production");
+        std::env::remove_var("HEALTH_EXPOSE_VERSION");
+
+        assert!(!should_expose_health_version(true));
+
+        match previous {
+            Some(value) => std::env::set_var("ENV", value),
+            None => std::env::remove_var("ENV"),
+        }
+        match expose_previous {
             Some(value) => std::env::set_var("HEALTH_EXPOSE_VERSION", value),
             None => std::env::remove_var("HEALTH_EXPOSE_VERSION"),
         }
@@ -1177,22 +1221,14 @@ mod tests {
 
     #[test]
     fn test_derive_legal_basis_mapping_and_validation() {
-        let derived = derive_legal_basis(None, Some("EXPORT_CSV"), Some("fiscal"), Some("DGFIP"))
-            .expect("derived");
-        assert_eq!(derived, "LEGAL_OBLIGATION");
-
-        let explicit =
-            derive_legal_basis(Some("public_task"), Some("QUERY"), Some("ops"), Some("org"))
-                .expect("explicit");
+        let explicit = derive_legal_basis(Some("public_task")).expect("explicit");
         assert_eq!(explicit, "PUBLIC_TASK");
 
-        let err = derive_legal_basis(
-            Some("UNKNOWN_BASIS"),
-            Some("QUERY"),
-            Some("ops"),
-            Some("org"),
-        )
-        .expect_err("invalid basis");
+        let missing = derive_legal_basis(None).expect_err("missing basis");
+        let missing_response = axum::response::IntoResponse::into_response(missing);
+        assert_eq!(missing_response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+        let err = derive_legal_basis(Some("UNKNOWN_BASIS")).expect_err("invalid basis");
         let response = axum::response::IntoResponse::into_response(err);
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }

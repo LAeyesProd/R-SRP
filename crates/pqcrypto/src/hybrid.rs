@@ -514,8 +514,11 @@ fn derive_hybrid_shared_secret(
 mod tests {
     use super::*;
 
+    // Non-production profile coverage: Dilithium2/Kyber512 vectors are retained for
+    // regression depth, but must not be interpreted as production-profile evidence.
     #[test]
-    fn test_hybrid_signature() {
+    #[cfg(not(feature = "production"))]
+    fn test_non_production_profile_hybrid_signature_dilithium2() {
         let signer = HybridSigner::new(DilithiumLevel::Dilithium2);
         let verifier = HybridVerifier::new(DilithiumLevel::Dilithium2);
 
@@ -531,7 +534,8 @@ mod tests {
     }
 
     #[test]
-    fn test_hybrid_signature_rejects_tampered_classical_part() {
+    #[cfg(not(feature = "production"))]
+    fn test_non_production_profile_hybrid_signature_rejects_tampered_classical_part() {
         let signer = HybridSigner::new(DilithiumLevel::Dilithium2);
         let verifier = HybridVerifier::new(DilithiumLevel::Dilithium2);
         let keypair = signer.generate_keypair().unwrap();
@@ -541,7 +545,8 @@ mod tests {
     }
 
     #[test]
-    fn test_hybrid_signature_rejects_tampered_quantum_part() {
+    #[cfg(not(feature = "production"))]
+    fn test_non_production_profile_hybrid_signature_rejects_tampered_quantum_part() {
         let signer = HybridSigner::new(DilithiumLevel::Dilithium2);
         let verifier = HybridVerifier::new(DilithiumLevel::Dilithium2);
         let keypair = signer.generate_keypair().unwrap();
@@ -551,7 +556,8 @@ mod tests {
     }
 
     #[test]
-    fn test_hybrid_signature_rejects_tampered_both_parts() {
+    #[cfg(not(feature = "production"))]
+    fn test_non_production_profile_hybrid_signature_rejects_tampered_both_parts() {
         let signer = HybridSigner::new(DilithiumLevel::Dilithium2);
         let verifier = HybridVerifier::new(DilithiumLevel::Dilithium2);
         let keypair = signer.generate_keypair().unwrap();
@@ -562,7 +568,8 @@ mod tests {
     }
 
     #[test]
-    fn test_hybrid_signature_verify_public_only() {
+    #[cfg(not(feature = "production"))]
+    fn test_non_production_profile_hybrid_signature_verify_public_only() {
         let signer = HybridSigner::new(DilithiumLevel::Dilithium2);
         let verifier = HybridVerifier::new(DilithiumLevel::Dilithium2);
         let keypair = signer.generate_keypair().unwrap();
@@ -574,7 +581,8 @@ mod tests {
     }
 
     #[test]
-    fn test_hybrid_kem() {
+    #[cfg(not(feature = "production"))]
+    fn test_non_production_profile_hybrid_kem_kyber512() {
         let encapsulator = HybridKEMEncapsulator::new(KyberLevel::Kyber512);
         let decapsulator = HybridKEMDecapsulator::new(KyberLevel::Kyber512);
 
@@ -587,7 +595,8 @@ mod tests {
     }
 
     #[test]
-    fn test_hybrid_kem_rejects_tampered_classical_component() {
+    #[cfg(not(feature = "production"))]
+    fn test_non_production_profile_hybrid_kem_rejects_tampered_classical_component() {
         let encapsulator = HybridKEMEncapsulator::new(KyberLevel::Kyber512);
         let decapsulator = HybridKEMDecapsulator::new(KyberLevel::Kyber512);
         let keypair = encapsulator.generate_keypair().unwrap();
@@ -598,7 +607,8 @@ mod tests {
     }
 
     #[test]
-    fn test_hybrid_kem_rejects_tampered_quantum_component() {
+    #[cfg(not(feature = "production"))]
+    fn test_non_production_profile_hybrid_kem_rejects_tampered_quantum_component() {
         let encapsulator = HybridKEMEncapsulator::new(KyberLevel::Kyber512);
         let decapsulator = HybridKEMDecapsulator::new(KyberLevel::Kyber512);
         let keypair = encapsulator.generate_keypair().unwrap();
@@ -606,5 +616,26 @@ mod tests {
         let (_, mut ciphertext) = encapsulator.encapsulate(&keypair).unwrap();
         ciphertext.quantum.ciphertext[0] ^= 0x7E;
         assert!(decapsulator.decapsulate(&keypair, &ciphertext).is_err());
+    }
+
+    #[test]
+    fn test_production_profile_hybrid_signature_dilithium3() {
+        let signer = HybridSigner::new(DilithiumLevel::Dilithium3);
+        let verifier = HybridVerifier::new(DilithiumLevel::Dilithium3);
+        let keypair = signer.generate_keypair().unwrap();
+        let signature = signer.sign(&keypair, b"prod").unwrap();
+
+        assert!(verifier.verify(&keypair, b"prod", &signature).unwrap());
+    }
+
+    #[test]
+    fn test_production_profile_hybrid_kem_kyber768() {
+        let encapsulator = HybridKEMEncapsulator::new(KyberLevel::Kyber768);
+        let decapsulator = HybridKEMDecapsulator::new(KyberLevel::Kyber768);
+        let keypair = encapsulator.generate_keypair().unwrap();
+        let (shared_1, ciphertext) = encapsulator.encapsulate(&keypair).unwrap();
+        let shared_2 = decapsulator.decapsulate(&keypair, &ciphertext).unwrap();
+
+        assert_eq!(shared_1, shared_2);
     }
 }

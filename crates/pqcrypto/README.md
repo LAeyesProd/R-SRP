@@ -10,7 +10,7 @@ Rust import path: `pqcrypto`
 ```rust
 use pqcrypto::{Dilithium, DilithiumLevel};
 
-let dilithium = Dilithium::new(DilithiumLevel::Dilithium2);
+let dilithium = Dilithium::new(DilithiumLevel::Dilithium3); // production profile
 let (public_key, secret_key) = dilithium.generate_keypair().expect("keygen");
 
 let msg = b"hello";
@@ -30,3 +30,6 @@ assert!(ok);
 
 Current implementations include placeholder/simulated logic in parts of the API and are not a drop-in replacement for audited production PQC libraries.
 
+Test naming convention:
+- `*_production_profile_*` tests cover ML-KEM-768 / ML-DSA-65 behavior.
+- `*_non_production_profile_*` tests cover Kyber512/Dilithium2 regression vectors and are not production evidence.

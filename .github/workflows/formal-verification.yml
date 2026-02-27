@@ -98,20 +98,19 @@ jobs:
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz
       
-      - name: Run fuzz tests - crypto
+      - name: Run fuzz tests and collect evidence
         continue-on-error: true
         run: |
-          cargo fuzz run crypto_fuzz -- -max_len=1024 -jobs=4 -workers=4 || true
-      
-      - name: Run fuzz tests - parser
-        continue-on-error: true
-        run: |
-          cargo fuzz run parser_fuzz -- -max_len=4096 -jobs=4 -workers=4 || true
-      
-      - name: Run fuzz tests - dsl
-        continue-on-error: true
-        run: |
-          cargo fuzz run dsl_fuzz -- -max_len=2048 -jobs=4 -workers=4 || true
+          export FUZZ_DURATION_SECONDS=180
+          export FUZZ_FAIL_ON_CRASH=0
+          bash scripts/run_fuzz_evidence.sh || true
+
+      - name: Upload fuzz campaign evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: formal-fuzz-evidence
+          path: fuzz/evidence/**
+          retention-days: 30
 
   # Loom Concurrency Testing
   loom-concurrency:
@@ -190,7 +189,7 @@ jobs:
         continue-on-error: true
         run: |
           # Generate coverage report from fuzzing
-          cargo fuzz coverage fuzz_target_1 -- -edge_Coverage=1 || true
+          cargo fuzz coverage dsl_parser -- -edge_Coverage=1 || true
       
       - name: Upload coverage
         uses: actions/upload-artifact@v4
