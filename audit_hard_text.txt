@@ -1,0 +1,301 @@
+R-SRP Security Codebase Audit
+Hard Audit Report — v0.9.x
+Date: 2026-02-27  |  Auditor: Claude (Anthropic)  |  Scope: Full source review
+1. Executive Summary
+This report documents 15 findings from a hard source-code audit of the R-SRP repository (Rust crates: crypto-core, pqcrypto, crue-dsl, crue-engine, immutable-logging; service: api-service). The audit reviewed cryptographic primitives, hybrid post-quantum constructions, JWT authentication, rate-limiting, the immutable audit chain, and the REST API layer.
+Two Critical findings undermine core security guarantees. The classical half of the hybrid signature scheme is implemented as a keyed hash rather than a real digital signature, and the mission-hours access control check is hardcoded to always pass. Both must be resolved before any production deployment.
+
+2. Finding Summary
+ID
+Severity
+Title
+File / Location
+F-01
+CRITICAL
+Classical half of HybridSigner is a keyed hash, not a real signature
+pqcrypto/src/hybrid.rs
+F-02
+CRITICAL
+is_within_mission_hours hardcoded to true — temporal RBAC bypass
+api-service/src/handlers.rs
+F-03
+HIGH
+Ed25519KeyPair signing_key NOT zeroed on drop (zeroize(skip))
+crypto-core/src/signature.rs
+F-04
+HIGH
+FIPS Enabled mode silently falls back to non-FIPS RNG
+crypto-core/src/signature.rs
+F-05
+HIGH
+SoftHsm.verify() signs again instead of using public key
+crypto-core/src/hsm.rs
+F-06
+HIGH
+Merkle tree has no leaf/node domain separation (2nd pre-image)
+crypto-core/src/merkle.rs
+F-07
+MEDIUM
+Rate limiter HashMap grows unbounded — memory DoS vector
+api-service/src/middleware.rs
+F-08
+MEDIUM
+Legal basis auto-derived from attacker-controlled fields
+api-service/src/handlers.rs
+F-09
+MEDIUM
+JWT HS256 permitted despite zero-trust posture
+api-service/src/auth.rs
+F-10
+MEDIUM
+LogChain is purely in-memory — no persistence or WAL
+immutable-logging/src/chain.rs
+F-11
+MEDIUM
+date path parameter not sanitized in get_daily_root handler
+api-service/src/handlers.rs
+F-12
+LOW
+generate_proof is O(n) full chain replay — no proof compaction
+immutable-logging/src/chain.rs
+F-13
+LOW
+entry_id uses only 8 hex chars of UUIDv4 — collision risk at scale
+immutable-logging/src/log_entry.rs
+F-14
+LOW
+TLS: empty PEM silently falls back to raw DER blob
+api-service/src/tls.rs
+F-15
+INFO
+Mock KEM tamper test asserts ? outcome, not explicit rejection
+pqcrypto/src/kem.rs
+
+3. Critical Findings
+F-01 — Classical half of HybridSigner is not a real signature
+F-01  [CRITICAL]  Classical half of HybridSigner is not a real signature
+File
+crates/pqcrypto/src/hybrid.rs — generate_keypair(), sign(), verify_public()
+Evidence
+fn mock_classical_public(secret: &[u8]) -> Vec<u8> {
+    SHA256(b&quot;rsrp-hybrid-mock-classical-public&quot; || secret)
+}
+fn mock_classical_signature(public_key: &[u8], message: &[u8]) -> Vec<u8> {
+    // Deterministic 64-byte keyed hash — NOT Ed25519
+}
+Impact
+An attacker can forge the classical component of any hybrid signature if they have access to the signer&apos;s &apos;classical public key&apos;, which is itself just a SHA-256 hash of the secret. With only the public key, forging classical signatures for arbitrary messages is trivially possible, reducing the hybrid scheme to pure Dilithium security.
+Recommendation
+Replace the mock classical path with a real Ed25519 key pair (ed25519-dalek is already a dependency). Store the Ed25519 SigningKey in HybridKeyPair and use it for signing. Export only the VerifyingKey for verification. Remove all mock_classical_* functions.
+
+F-02 — is_within_mission_hours hardcoded to true
+F-02  [CRITICAL]  is_within_mission_hours hardcoded true — temporal RBAC bypass
+File
+services/api-service/src/handlers.rs — validate_access(), validate_access_post()
+Evidence
+let request = crue_engine::EvaluationRequest {
+    ...
+    request_hour: chrono::Utc::now().hour(),
+    is_within_mission_hours: true,  // ? hardcoded, NEVER enforced
+};
+Impact
+All temporal access controls enforced by the CRUE engine that depend on is_within_mission_hours are inoperative. Agents can perform sensitive queries outside authorized hours. This directly contradicts the zero-trust and mission-scoped access model described in the architecture documentation.
+Recommendation
+Implement actual mission-hour evaluation logic. Fetch the mission record (by mission_id/type) and compare chrono::Utc::now() against the mission&apos;s allowed time window. Only set is_within_mission_hours: true when the check passes. If mission schedule data is unavailable, default to false (fail-closed).
+
+4. High Findings
+F-03 — Ed25519 signing key not zeroed on drop
+F-03  [HIGH]  Ed25519KeyPair private key not zeroed despite ZeroizeOnDrop
+File
+crates/crypto-core/src/signature.rs — Ed25519KeyPair
+Evidence
+#[derive(Zeroize, ZeroizeOnDrop)]
+pub struct Ed25519KeyPair {
+    #[zeroize(skip)]
+    signing_key: SigningKey,   // ? private key is SKIPPED
+    #[zeroize(skip)]
+    verifying_key: VerifyingKey,
+    #[zeroize(skip)]
+    metadata: KeyMetadata,
+}
+Impact
+Private key material persists in process memory after the key pair is dropped. In a long-running service or after a crash, the signing key could be extracted from memory dumps, /proc/mem reads, or coredumps, allowing an attacker to forge signatures on any data.
+Recommendation
+Remove #[zeroize(skip)] from signing_key. ed25519-dalek&apos;s SigningKey implements Zeroize; dropping the #[zeroize(skip)] annotation will cause it to be zeroed on drop. Keep #[zeroize(skip)] on verifying_key (public) and metadata if desired, but signing_key must be zeroed.
+
+F-04 — FIPS Enabled silently falls back to non-FIPS RNG
+F-04  [HIGH]  FipsMode::Enabled logs warning but silently continues with non-FIPS RNG
+File
+crates/crypto-core/src/signature.rs — generate_with_mode()
+Evidence
+FipsMode::Enabled => {
+    tracing::warn!(&quot;OS entropy unavailable, using fallback RNG (non-FIPS)&quot;);
+    Self::generate_fallback()  // continues without failing
+}
+Impact
+Key generation proceeds with non-FIPS entropy while the system believes it is operating in FIPS mode. FIPS certification may be invalidated silently. In regulated environments (government, financial), this is a compliance violation that may go undetected indefinitely.
+Recommendation
+Change the FipsMode::Enabled branch to return an error (like FipsMode::Strict), or at minimum propagate the fallback to the caller so it can decide whether to abort. Document that RUST_FIPS=strict is the only mode that guarantees FIPS compliance.
+
+F-05 — SoftHsm.verify() re-signs instead of using public key
+F-05  [HIGH]  SoftHsm.verify() produces a fresh signature and compares bytes
+File
+crates/crypto-core/src/hsm.rs — SoftHsm::verify()
+Evidence
+fn verify(&mut self, key_handle: &HsmKeyHandle, data: &[u8], signature: &[u8]) -> Result<bool> {
+    let computed = self.sign(key_handle, data)?;   // re-signs!
+    Ok(computed.as_slice().ct_eq(signature).into())
+}
+Impact
+Any HsmSession that only has read/verify access cannot call verify() because it internally calls sign(). This will cause authentication failures or require unnecessary privilege escalation. Additionally, the conceptual model is wrong: HSM verification should use the public key exported at key generation time.
+Recommendation
+Implement proper Ed25519 verification in SoftHsm: derive the verifying key from the stored seed, then call verifying_key.verify(data, sig). Split the HsmSession trait into a Signer and Verifier trait if necessary to enforce least privilege.
+
+F-06 — Merkle tree has no leaf/node domain separation
+F-06  [HIGH]  Merkle tree vulnerable to second pre-image attack (no domain tags)
+File
+crates/crypto-core/src/merkle.rs — build_tree(), add_leaf()
+Evidence
+fn build_tree(&self, nodes: &[Vec<u8>]) -> Vec<u8> {
+    // Internal node: H(left || right)
+    let combined = left.iter().chain(right.iter()).cloned().collect();
+    hash(&combined, self.algorithm)  // No domain tag!
+}
+// Leaf: H(data) — same hash function, no 0x00/0x01 prefix
+Impact
+The audit log Merkle tree can be subverted. An attacker can introduce a crafted leaf entry that claims to be present in the tree but represents a falsified log record, undermining the tamper-evidence guarantees of the immutable ledger.
+Recommendation
+Prefix leaf hashes with 0x00 and internal node hashes with 0x01 before hashing: leaf_hash = H(0x00 || data), internal = H(0x01 || left || right). This is the RFC 6962 / certificate transparency approach and is the industry standard for tamper-evident Merkle trees.
+
+5. Medium Findings
+F-07 — Rate limiter HashMap grows without bound
+F-07  [MEDIUM]  IpRateLimiter buckets HashMap has no eviction — memory DoS
+File
+services/api-service/src/middleware.rs — IpRateLimiter
+Evidence
+buckets: Mutex<HashMap<String, WindowBucket>>,
+// No eviction, no max-size — unbounded growth
+Impact
+A sustained flood of requests from distinct IPs will exhaust heap memory, causing an OOM kill and a denial of service. In IPv6 environments, the address space is vast and probing is trivially automated.
+Recommendation
+Cap the map at a maximum size (e.g., 100,000 entries) and evict least-recently-used entries when the cap is reached, or use an age-based eviction (delete any bucket where window_started_at + window < now during the next check). Consider using the moka or lru crate for a thread-safe LRU cache.
+
+F-08 — Legal basis auto-derived from attacker-controlled request fields
+F-08  [MEDIUM]  derive_legal_basis() maps attacker fields to GDPR legal basis claims
+File
+services/api-service/src/handlers.rs — derive_legal_basis()
+Evidence
+if mission_type.contains(&quot;PUBLIC&quot;) { return Ok(&quot;PUBLIC_TASK&quot;.to_string()); }
+if agent_org.contains(&quot;DGFIP&quot;) { return Ok(&quot;PUBLIC_TASK&quot;.to_string()); }
+// Caller controls mission_type and agent_org
+Impact
+Falsified legal basis claims in audit logs undermine regulatory compliance evidence. An unauthorized access could be recorded as legally justified, making forensic analysis of incidents unreliable.
+Recommendation
+Legal basis must be verified against an authoritative source (e.g., mission registry or identity provider claims), not derived from free-form request fields. Either require explicit legal_basis on GET requests (as is done on POST) or map legal basis from validated mission metadata that cannot be spoofed by the caller.
+
+F-09 — JWT HS256 permitted in a zero-trust deployment
+F-09  [MEDIUM]  HS256 allowed — symmetric JWT algorithm incompatible with zero-trust
+File
+services/api-service/src/auth.rs — JwtAuthConfig::from_env()
+Evidence
+Algorithm::HS256 => {
+    let secret = required_env(&quot;JWT_SECRET&quot;)?;
+    tracing::warn!(&quot;JWT_ALGORITHM=HS256 ... Prefer EdDSA/RS256&quot;);
+    DecodingKey::from_secret(secret.as_bytes())
+}
+Impact
+A compromised service in the mesh, or a leaked JWT_SECRET environment variable, allows unlimited forging of admin-level JWTs for any user or role. This completely breaks authentication.
+Recommendation
+Disallow HS256 entirely. Return a hard error if JWT_ALGORITHM=HS256 is configured. Enforce EdDSA (or RS256 as fallback) which separate signing (IdP only) from verification (services use public key only).
+
+F-10 — LogChain is purely in-memory with no persistence
+F-10  [MEDIUM]  LogChain has no WAL or persistent storage — chain lost on restart
+File
+crates/immutable-logging/src/chain.rs — LogChain
+Evidence
+pub struct LogChain {
+    entries: Vec<LogEntry>,    // in-memory only
+    current_hash: String,
+    entry_index: HashMap<String, usize>,
+}
+Impact
+An adversary who can trigger a service restart (e.g., via a crash induced through the API, OOM, or infrastructure action) can erase the in-memory chain without disturbing the hourly root files. Post-restart, a new chain begins from genesis. Chain continuity cannot be forensically proven across restarts.
+Recommendation
+Persist the log chain to durable storage with write-ahead semantics (e.g., append-only file, SQLite WAL, or a streaming ledger). On startup, replay the WAL to reconstruct the in-memory state. At minimum, persist current_hash to durable storage atomically after each append so restart continuity can be verified.
+
+F-11 — date parameter not sanitized in get_daily_root
+F-11  [MEDIUM]  User-controlled date in path not validated before use in file operations
+File
+services/api-service/src/handlers.rs — get_daily_root(), load_daily_publication_from_dir()
+Evidence
+pub async fn get_daily_root(
+    Path(date): Path<String>,  // user-controlled
+) -> Result<...> {
+    let publication = load_daily_publication_from_dir(dir, &date)  // no validation
+Impact
+Although directory traversal is not currently exploitable, the absence of input validation is a code-quality and defense-in-depth concern. A future refactor that interpolates the date differently could introduce a real vulnerability.
+Recommendation
+Validate the date parameter against a strict regex or NaiveDate::parse_from_str before use. Return HTTP 400 for any date that does not match exactly YYYY-MM-DD format.
+
+6. Low Findings
+F-12 — generate_proof is O(n) full chain replay
+F-12  [LOW]  Chain proof includes all entries — O(n) computation and response size
+File
+crates/immutable-logging/src/chain.rs — generate_proof()
+Impact
+After prolonged operation (days/weeks), proof generation becomes a denial-of-service vector. A caller requesting a proof for entry 1 in a million-entry chain forces the server to serialize and transmit the full chain history.
+Recommendation
+Use the Merkle tree structure already available to generate O(log N) proofs. For the chain link itself, only include chain steps from the target entry forward to the chain head (the proof of inclusion), not from genesis.
+
+F-13 — entry_id uses only 8 hex characters of UUIDv4
+F-13  [LOW]  Short entry_id has high collision probability at scale
+File
+crates/immutable-logging/src/log_entry.rs — LogEntryBuilder::build()
+Evidence
+let entry_id = format!(&quot;le_{}_{}&quot;,
+    timestamp_unix,
+    uuid::Uuid::new_v4().to_string().split(&apos;-&apos;).next()  // only 8 hex chars
+);
+Impact
+At high request rates, entry ID collisions cause the second entry to silently overwrite the first in the index HashMap. A log entry would be lost from chain traversal without any error being raised.
+Recommendation
+Use the full UUID (uuid::Uuid::new_v4().to_string()) for the random component, or use a cryptographically secure monotonic counter. Entry IDs must be globally unique for the lifetime of the chain.
+
+F-14 — TLS PEM parser silently falls back to raw DER blob
+F-14  [LOW]  Empty PEM cert chain silently accepted as raw DER
+File
+services/api-service/src/tls.rs — parse_cert_chain()
+Evidence
+if bytes.starts_with(b&quot;-----BEGIN&quot;) {
+    let certs = CertificateDer::pem_slice_iter(bytes).collect()?;
+    if !certs.is_empty() { return Ok(certs); }
+    // Falls through if 0 certs parsed!
+}
+Ok(vec![CertificateDer::from(bytes.to_vec())])  // treats blob as DER
+Impact
+A misconfiguration (wrong file path, key file passed instead of cert) is masked rather than reported as a clear error. TLS may start with an invalid certificate without the operator being notified.
+Recommendation
+After collecting PEM certs, if the result is empty, return a TlsError::CertificateParse(&quot;No certificates found in PEM data&quot;) rather than falling back to DER. Only attempt DER fallback when the input does not start with a PEM header.
+
+7. Informational
+F-15 — Mock KEM tamper test verifies ? outcome, not rejection
+F-15  [INFO]  Kyber tamper test checks result != expected rather than decapsulation failure
+File
+crates/pqcrypto/src/kem.rs — test_kyber_decapsulation_rejects_tampered_ciphertext
+Evidence
+ciphertext.ciphertext[0] ^= 0x01;
+let tampered = kyber.decapsulate(&secret_key, &ciphertext).unwrap();
+assert_ne!(shared_secret, tampered);  // should be assert!(decapsulate.is_err())?
+Impact
+Informational only. No security impact for the mock; may cause confusion when integrating real OQS backend.
+Recommendation
+Rename the test to test_kyber_decapsulation_implicit_rejection_on_tamper and add a comment explaining that FIPS 203 ML-KEM uses implicit rejection (decapsulation succeeds but returns a random value on invalid ciphertext).
+
+8. Conclusion
+The R-SRP codebase demonstrates strong architectural intent — hybrid post-quantum crypto, hash-chained audit logs, zero-trust mTLS, and CRUE policy enforcement. The engineering quality of individual modules (canonical encoding, DSL parser, proof envelope) is high.
+However, two Critical findings mean the system should not be promoted to production in its current state: the hybrid signature classical component is not cryptographically binding, and temporal access controls are silently disabled. Addressing F-01 and F-02 is a prerequisite for any production readiness milestone.
+The High findings (F-03 through F-06) deal with key material lifecycle, FIPS posture, and fundamental Merkle tree security — all must be resolved before the system can be submitted for formal certification (e.g., Common Criteria, CSPN). The Medium and Low findings represent hardening work appropriate for a pre-GA sprint.
+
+END OF REPORT
+
+

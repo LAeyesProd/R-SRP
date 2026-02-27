@@ -1,0 +1,48 @@
+# RSRP Immutable Ledger - Append-only audit logs with cryptographic proof
+#
+# Provides tamper-evident logging with hash chaining, Merkle trees,
+# and TSA timestamps.
+
+[package]
+name = "rsrp-immutable-ledger"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Append-only immutable audit ledger with hash chaining, Merkle roots, and publication support"
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "README.md"
+documentation = "https://docs.rs/rsrp-immutable-ledger"
+
+[lib]
+name = "immutable_logging"
+
+[package.metadata.aliases]
+# Future: rsrp-immutable-ledger = "immutable-logging"
+
+[features]
+default = ["std"]
+std = []
+tsa-http-client = ["dep:reqwest"]
+tsa-cms-openssl = ["dep:openssl"]
+
+[dependencies]
+sha2 = "0.10"
+blake3 = "1.5"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.7", features = ["v4", "serde"] }
+thiserror = "1.0"
+tracing = "0.1"
+tokio = { version = "1.35", features = ["sync", "rt", "rt-multi-thread", "macros"] }
+reqwest = { version = "0.12.28", default-features = false, features = ["json", "rustls-tls-native-roots", "http2"], optional = true }
+base64 = "0.22"
+flate2 = "1.0"
+openssl = { version = "0.10", optional = true }
+
+[dev-dependencies]
+tempfile = "3.8"

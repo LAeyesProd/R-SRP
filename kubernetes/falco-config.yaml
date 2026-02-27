@@ -1,0 +1,264 @@
+# Falco Configuration for R-SRP Ultra
+# Runtime security monitoring with eBPF
+
+# Falco Helm values
+falco:
+  # Enable eBPF probe (preferred over kernel module)
+  ebpf:
+    enabled: true
+    path: ""
+    probeMountPath: /usr/falco-probe
+  
+  # Resource limits
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 1024Mi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+  
+  # Falco service
+  service:
+    type: ClusterIP
+  
+  #falcoctl-artifact-install
+  falcoctl:
+    image:
+      repository: falcosecurity/falcoctl
+      tag: "0.8.0"
+  
+  # Audit logging
+  audit:
+    enabled: true
+    keepalive: true
+  
+  # Prometheus metrics
+  prometheus:
+    enabled: true
+    metrics: true
+    grpc: true
+    grpcPort: 5060
+    httpPort: 8765
+  
+  # Custom rules for R-SRP
+  customRules:
+    # R-SRP specific security rules
+    rsrp-rules.yaml: |
+      # List of macros (short-hand for rules)
+      - macro: rsrp_service
+        condition: container.image startswith "ghcr.io/rsrp-ultra/"
+      
+      - macro: is_privileged_container
+        condition: container.privileged = true
+      
+      - macro: sensitive_mount
+        condition: (evt.arg[0] contains "/etc/shadow" or evt.arg[0] contains "/etc/passwd")
+      
+      - macro: network_tool
+        condition: (evt.arg[0] contains "nc" or evt.arg[0] contains "ncat" or evt.arg[0] contains "netcat")
+      
+      - macro: sql_database
+        condition: (evt.arg[0] contains "postgres" or evt.arg[0] contains "mysql" or evt.arg[0] contains "sqlite")
+      
+      # R-SRP Rules
+      
+      # Rule: Detect privileged containers
+      - rule: R-SRP Privileged Container
+        desc: Detect if R-SRP service runs in privileged mode
+        condition: rsrp_service and is_privileged_container
+        priority: CRITICAL
+        output: |
+          R-SRP service running in privileged mode (user=%user.name container=%container.id image=%container.image)
+        tags: [container, rsrp, critical]
+      
+      # Rule: Detect container escape attempts
+      - rule: R-SRP Container Escape Attempt
+        desc: Detect potential container escape via sensitive file access
+        condition: rsrp_service and sensitive_mount
+        priority: CRITICAL
+        output: |
+          R-SRP container escape attempt detected (file=%evt.arg[0] user=%user.name container=%container.id)
+        tags: [container, rsrp, critical, security]
+      
+      # Rule: Detect network tools in containers
+      - rule: R-SRP Network Tool Detected
+        desc: Detect network tools inside R-SRP containers
+        condition: rsrp_service and network_tool
+        priority: WARNING
+        output: |
+          Network tool detected in R-SRP container (tool=%evt.arg[0] user=%user.name container=%container.id)
+        tags: [container, rsrp, network, warning]
+      
+      # Rule: Detect database access from unexpected containers
+      - rule: R-SRP Database Access Violation
+        desc: Detect unexpected database access
+        condition: rsrp_service and sql_database
+        priority: WARNING
+        output: |
+          Database access in R-SRP service (file=%evt.arg[0] user=%user.name container=%container.id)
+        tags: [container, rsrp, database, warning]
+      
+      # Rule: Detect shell spawn in container
+      - rule: R-SRP Shell Spawn
+        desc: Detect shell spawn in R-SRP container
+        condition: >
+          rsrp_service and
+          evt.type = execve and
+          (evt.arg.sh = "/bin/sh" or evt.arg.sh = "/bin/bash" or evt.arg.sh = "/usr/bin/sh")
+        priority: WARNING
+        output: |
+          Shell spawn detected in R-SRP container (user=%user.name shell=%evt.arg.sh container=%container.id)
+        tags: [container, rsrp, shell, warning]
+      
+      # Rule: Detect unauthorized process
+      - rule: R-SRP Unauthorized Process
+        desc: Detect unauthorized process execution
+        condition: rsrp_service and evt.type = execve and not allowed_rsrp_procs
+        priority: WARNING
+        output: |
+          Unauthorized process in R-SRP container (proc=%evt.arg[0] user=%user.name container=%container.id)
+        tags: [container, rsrp, process, warning]
+      
+      # Rule: Detect file permission change
+      - rule: R-SRP File Permission Change
+        desc: Detect file permission changes in R-SRP containers
+        condition: rsrp_service and evt.type in (chmod, fchmod, fchmodat) and modify
+        priority: INFO
+        output: |
+          File permission changed in R-SRP container (file=%evt.arg[0] mode=%evt.arg[1] user=%user.name container=%container.id)
+        tags: [container, rsrp, file, info]
+      
+      # Rule: Detect outbound network connections
+      - rule: R-SRP Unexpected Outbound Connection
+        desc: Detect unexpected outbound connections from R-SRP services
+        condition: rsrp_service and evt.type = connect and fd.ip != ""
+        priority: WARNING
+        output: |
+          Outbound connection from R-SRP container (dest=%evt.arg[1] user=%user.name container=%container.id)
+        tags: [container, rsrp, network, warning]
+      
+      # Rule: Detect sensitive file access
+      - rule: R-SRP Sensitive File Access
+        desc: Detect access to sensitive files
+        condition: >
+          rsrp_service and
+          (evt.type = open or evt.type = openat) and
+          (evt.arg.filename contains "/etc/passwd" or
+           evt.arg.filename contains "/etc/shadow" or
+           evt.arg.filename contains "/etc/sudoers" or
+           evt.arg.filename contains "/root/.ssh")
+        priority: WARNING
+        output: |
+          Sensitive file access in R-SRP container (file=%evt.arg.filename user=%user.name container=%container.id)
+        tags: [container, rsrp, file, warning]
+      
+      # Macro: Allowed R-SRP processes
+      - macro: allowed_rsrp_procs
+        condition: >
+          (evt.arg[0] = "api-service" or
+           evt.arg[0] = "crue-engine" or
+           evt.arg[0] = "crue-dsl" or
+           evt.arg[0] = "crypto-core" or
+           evt.arg[0] = "immutable-logging" or
+           evt.arg[0] = "identity-proxy" or
+           evt.arg[0] = "anomaly-detector")
+  
+  # Falco rules files
+  rulesFile:
+    - /etc/falco/falco_rules.yaml
+    - /etc/falco/falco_rules.local.yaml
+    - /etc/falco/rsrp-rules.yaml
+  
+  # JSON output
+  jsonOutput: true
+  jsonIncludeAllProperty: true
+  
+  # Buffer size
+  bufferedOutputs: false
+  output: |
+    file: /var/log/falco/falco.json
+    stdout: none
+  
+  # Syscall events
+  syscall:
+    events:
+      - read
+      - write
+      - open
+      - connect
+      - accept
+      - sendto
+      - recvfrom
+      - sendmsg
+      - recvmsg
+      - shutdown
+      - bind
+      - listen
+      - accept4
+      - recvmsg
+      - sendmsg
+      - stat
+      - lstat
+      - fstat
+      - newfstatat
+      - epoll_wait
+      - poll
+    dockerEnabled: true
+    k8sAuditEnabled: true
+  
+  # Falco sidecar for syscall capture
+  collector:
+    enabled: true
+    sockets:
+      - name: containerd
+        type: unix
+        path: /run/containerd/containerd.sock
+      - name: docker
+        type: unix
+        path: /var/run/docker.sock
+
+# Tetragon Configuration
+tetragon:
+  enabled: true
+  
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 50m
+      memory: 128Mi
+  
+  # Export to external system
+  export:
+    enabled: true
+    format: "json"
+    endpoint: "grpc://tetragon-collector:9000"
+  
+  # Policy filters
+  filters:
+    - namespace: rsrp-prod
+    - namespace: rsrp-staging
+  
+  # Enable sensors
+  sensors:
+    - kprobe
+    - tracepoint
+    - syscall
+  
+  # Kubernetes audit events
+  k8sAuditServer:
+    enabled: true
+    port: 8888
+  
+  # Process monitoring
+  processMonitoring:
+    enabled: true
+    notifyFilesystem: true
+    notifyNetwork: true
+  
+  # Network monitoring
+  network:
+    enabled: true
+    enablePolicyTracers: true

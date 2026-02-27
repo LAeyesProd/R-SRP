@@ -1,0 +1,338 @@
+R-SRP
+Security Code Audit Report
+Version 0.9.7  |  Audit Date: 27 February 2026
+Audited by: Claude (Anthropic)  |  Classification: CONFIDENTIAL
+
+
+1. Executive Summary
+This report documents a hard security audit of the R-SRP codebase (v0.9.7), a Rust-based zero-trust access control and immutable audit logging platform designed for critical government and financial systems. The audit covered all source packages: crypto-core, pqcrypto, crue-dsl, crue-engine, immutable-logging, and the api-service, as well as configuration and CI pipeline assets.
+
+The codebase demonstrates a mature security posture in many areas: strong use of zeroize for key material, proper TLS 1.3 enforcement in release builds, a structured bytecode VM for policy evaluation, hash-chained immutable logs, and a well-thought-out post-quantum hybrid crypto layer. However, several actionable vulnerabilities were identified spanning authentication, cryptographic integrity, input validation, and operational security.
+
+Overall Risk Rating: HIGH
+18 findings identified: 0 Critical · 5 High · 6 Medium · 5 Low · 2 Info. The two highest-priority issues (F-01 JWT validation gaps, F-03 non-deterministic canonical signatures) create exploitable attack surfaces in production and must be remediated before any external deployment.
+
+1.1 Finding Summary
+ID
+Severity
+Title
+Location
+Status
+F-01
+HIGH
+JWT: Missing audience/issuer validation
+api-service/src/auth.rs
+OPEN
+F-02
+HIGH
+JWT: HMAC-SHA256 symmetric secret — no asymmetric option
+api-service/src/auth.rs
+OPEN
+F-03
+HIGH
+Canonical JSON signature non-deterministic (serde field order)
+immutable-logging/src/publication.rs
+OPEN
+F-04
+HIGH
+X-Forwarded-For IP spoofing — rate limiter and logs bypassed
+api-service/src/middleware.rs
+OPEN
+F-05
+HIGH
+SoftHSM verify() uses sign-then-compare (timing oracle)
+crypto-core/src/hsm.rs
+OPEN
+F-06
+MEDIUM
+HKDF secret key derivation exposes bootstrap secret in plaintext env var
+api-service/src/main.rs
+OPEN
+F-07
+MEDIUM
+No string-length / size limits on API input fields
+api-service/src/models.rs
+OPEN
+F-08
+MEDIUM
+Hybrid KEM classical component: only 16-byte auth tag (HMAC truncation)
+pqcrypto/src/hybrid.rs
+OPEN
+F-09
+MEDIUM
+DSL parser: large untrusted rules could exhaust memory (no depth/size limits)
+crue-dsl/src/parser.rs
+OPEN
+F-10
+MEDIUM
+Merkle tree second-preimage vulnerability (no leaf/node domain separation)
+immutable-logging/src/merkle_service.rs
+OPEN
+F-11
+MEDIUM
+Production FIPS fallback silently degrades to non-FIPS RNG (no audit log)
+crypto-core/src/signature.rs
+OPEN
+F-12
+MEDIUM
+Daily publication date taken from server clock — no monotonicity check
+api-service/src/handlers.rs
+OPEN
+F-13
+LOW
+Health/readiness endpoints unauthenticated — information disclosure
+api-service/src/main.rs
+OPEN
+F-14
+LOW
+Rate limiter in-memory only — not shared across replicas
+api-service/src/middleware.rs
+OPEN
+F-15
+LOW
+RUSTSEC-2025-0134 suppressed without verified mitigation
+deny.toml
+OPEN
+F-16
+LOW
+Compliance.legal_basis hardcoded to &apos;UNSPECIFIED&apos; in every audit entry
+api-service/src/handlers.rs
+OPEN
+F-17
+LOW
+No request body size limit configured on Axum router
+api-service/src/main.rs
+OPEN
+F-18
+INFO
+Mock crypto backend reachable in non-release test builds (no guard)
+pqcrypto/src/kem.rs
+OPEN
+
+
+2. Scope & Methodology
+The audit covered the full R-SRP monorepo as provided (git archive, commit snapshot dated 2026-02-27). The following crates and services were reviewed:
+crates/crypto-core — classical cryptographic primitives (SHA-2, BLAKE3, Ed25519, HMAC, HSM abstraction)
+crates/pqcrypto — post-quantum KEM (ML-KEM / Kyber) and signature (ML-DSA / Dilithium) with hybrid X25519+Kyber and Ed25519+Dilithium
+crates/crue-dsl — policy DSL tokenizer, parser, compiler (bytecode generation)
+crates/crue-engine — bytecode VM, proof binding, signed proof envelopes (Ed25519 and hybrid PQ)
+crates/immutable-logging — append-only hash-chained ledger, Merkle tree, daily publication, TSA timestamping
+services/api-service — Axum HTTP gateway, JWT auth, RBAC, rate limiting, mTLS, API handlers
+Infrastructure assets — Terraform, Kubernetes (Cilium/Falco/Kyverno), GitHub Actions CI, Dockerfile, deny.toml
+
+Methodology: manual static analysis of all Rust source files with emphasis on cryptographic correctness, authentication and authorization logic, input validation, error handling, and operational security. Dependency advisory review via deny.toml. No dynamic testing or fuzzing runs were executed in this engagement.
+
+3. Detailed Findings
+F-01 [HIGH] JWT: Missing audience and issuer validation
+Location: services/api-service/src/auth.rs — JwtAuthConfig::from_secret()
+The JWT validation object is constructed with only expiry (exp) as a required claim. The aud (audience) and iss (issuer) claims are present in the JwtClaims struct but are never enforced during token validation.
+
+validation.required_spec_claims.insert(&quot;exp&quot;.to_string());
+// Missing: validation.set_audience(&[&quot;rsrp-api&quot;]); validation.set_issuer(&[&quot;auth-server&quot;]);
+
+Impact: A JWT issued for a different service or by a different issuer will be accepted, enabling token replay attacks across services. Any token bearing a valid HMAC and a future expiry will authenticate regardless of intended audience.
+Recommendation: Add set_audience() and set_issuer() calls. Enforce iss and aud as required claims, sourced from configuration (not hardcoded).
+
+F-02 [HIGH] JWT uses symmetric HMAC-SHA256 — no asymmetric option
+Location: services/api-service/src/auth.rs
+All JWTs are validated with Algorithm::HS256 (symmetric HMAC). Any service or component with access to JWT_SECRET can forge arbitrary tokens. This is a systemic risk in a zero-trust architecture where multiple services must share the secret.
+Recommendation: Migrate to RS256 or EdDSA (Ed25519) with a dedicated signing key pair. Use the existing crypto-core Ed25519 infrastructure. Deprecate symmetric HMAC for service-to-service authentication.
+
+F-03 [HIGH] Canonical JSON signature relies on serde field ordering
+Location: crates/immutable-logging/src/publication.rs — DailyPublication::to_canonical_json_bytes()
+The publication_signed_payload() function strips signature and TSA fields then serializes the struct with serde_json::to_vec(). Serde serializes struct fields in declaration order; this is not a guaranteed stable property of the JSON format and is not documented as an invariant. Any refactoring that reorders struct fields (or a future serde version change) silently breaks all signature verifications without any compile-time warning.
+pub fn to_canonical_json_bytes(&self) -> Result<Vec<u8>, crate::error::LogError> {
+    serde_json::to_vec(self)  // NOT canonicalized — relies on struct field order
+}
+
+Impact: Latent signature verification breakage. In a cross-language or multi-version context (e.g., the interop scripts in scripts/interop/), this produces silent verification failures.
+Recommendation: Implement a proper canonical JSON serialization (e.g., JCS - JSON Canonicalization Scheme, RFC 8785) over a fixed, explicitly versioned schema. The log_entry.rs canonical encoding approach (schema-prefixed deterministic TLV) is the right model and should be applied to publications as well.
+
+F-04 [HIGH] X-Forwarded-For trusted without proxy validation — IP spoofing
+Location: services/api-service/src/middleware.rs — client_key_from_request()
+The rate limiter and audit log extract client IP by reading X-Forwarded-For without any verification that the request came through a trusted proxy. A direct-connection client can set this header to an arbitrary value, bypassing rate limiting and poisoning audit logs with forged IP addresses.
+if let Some(value) = headers.get(forwarded_for).and_then(|v| v.to_str().ok()) {
+    if let Some(first) = value.split(&apos;,&apos;).next() {
+        // Blindly trusted without proxy allowlist
+        return format!(&quot;ip:{ip}&quot;);
+    }
+}
+
+Recommendation: Introduce a TRUSTED_PROXY_CIDRS configuration variable. Only honour X-Forwarded-For when the TCP connection originates from a trusted CIDR. Otherwise fall back to the direct connection IP.
+
+F-05 [HIGH] SoftHSM verify() is sign-then-compare — timing oracle
+Location: crates/crypto-core/src/hsm.rs — SoftHsm::verify()
+The SoftHSM verify() method signs the input data and compares the result to the provided signature using standard equality (==). This creates a timing side-channel: an attacker can learn partial signature information by measuring the time difference between comparisons of signatures that share a common prefix.
+fn verify(&mut self, key_handle, data, signature) -> Result<bool> {
+    let computed = self.sign(key_handle, data)?;
+    Ok(computed == signature)  // Timing oracle: early exit on first differing byte
+}
+
+Recommendation: Replace with a constant-time comparison using subtle::ConstantTimeEq. While SoftHSM is flagged as non-production, it is used in the API service&apos;s audit signing path (softhsm provider) and must meet production-equivalent security standards.
+
+F-06 [MEDIUM] Bootstrap key derived from plaintext environment variable
+Location: services/api-service/src/main.rs — AUDIT_PUBLICATION_SIGNING_SECRET
+The Ed25519 signing key for audit publications is deterministically derived from AUDIT_PUBLICATION_SIGNING_SECRET via HKDF. This means the entire signing key is exposed as a plaintext environment variable, typically stored in Kubernetes Secrets, .env files, or CI secrets — all of which have much weaker confidentiality guarantees than an HSM.
+A compromise of the environment (process listing, container escape, CI log leak) directly yields the ability to forge all past and future audit publications without detection.
+Recommendation: For production, mandate the softhsm/HSM provider path or integrate with a KMS (AWS KMS, Vault Transit). Document that the software-ed25519 path is only acceptable for development environments. Add a startup warning if software-ed25519 is selected in a non-development build.
+
+F-07 [MEDIUM] No length limits on API string fields
+Location: services/api-service/src/models.rs — ValidationRequest / ValidateParams
+Fields such as agent_id, agent_org, justification, query_type, and allowed_departments have no maximum length validation. An authenticated attacker (AGENT role is sufficient) could submit requests with multi-megabyte field values. These values are then inserted into immutable log entries, which are SHA-256 hashed and stored — creating a persistent denial-of-service or storage exhaustion vector.
+Recommendation: Add validation middleware or serde validation attributes (e.g., validator crate) enforcing maximum lengths (e.g., 256 bytes for IDs, 4096 bytes for justification). Return HTTP 422 for oversized inputs.
+
+F-08 [MEDIUM] Hybrid KEM binding tag is only 128 bits (SHA-256 truncated to 16 bytes)
+Location: crates/pqcrypto/src/hybrid.rs — derive_classical_auth_tag()
+The classical/quantum binding authentication tag is produced by truncating a SHA-256 digest to 16 bytes. For a system marketed as post-quantum resistant, 128-bit tags may be considered insufficient against quantum adversaries (Grover&apos;s algorithm halves the effective security to 64 bits on the tag).
+fn derive_classical_auth_tag(shared_quantum, eph_public) -> [u8; 16] {
+    // SHA-256 output truncated to 128 bits
+    let mut out = [0u8; HYBRID_CLASSICAL_TAG_SIZE]; // = 16
+    out.copy_from_slice(&digest[..16]);
+}
+
+Recommendation: Extend the auth tag to 32 bytes (full SHA-256 output) or use HMAC with a domain-separated key derived from the shared quantum secret. This is a minor change with significant post-quantum security improvement.
+
+F-09 [MEDIUM] DSL parser lacks depth and token count limits
+Location: crates/crue-dsl/src/parser.rs
+The CRUE DSL parser and tokenizer have no limits on input size, recursion depth, or token count. Deeply nested boolean expressions or extremely long rule files can cause stack overflow (recursive descent parser) or O(n) memory allocation. While the current API does not accept rule uploads at runtime, the register_compiled_rule_source() engine method is public and used in tests — a future API exposure would create a DoS vector.
+Recommendation: Add a maximum token count check in tokenize() (e.g., 10,000 tokens) and a recursion depth counter in the expression parser. Return a DslError::RuleTooComplex variant rather than panicking or overflowing.
+
+F-10 [MEDIUM] Merkle tree vulnerable to second-preimage attack (no leaf/node domain separation)
+Location: crates/immutable-logging/src/merkle_service.rs and publication.rs
+The Merkle tree implementation uses the same SHA-256 hash function for both leaf nodes and internal nodes, with no domain separation. This is a well-known vulnerability: an attacker who can control the content of two leaf nodes can craft values where the hash of a leaf node equals the expected hash of an internal node, breaking proof integrity.
+Recommendation: Apply standard Merkle leaf/node prefixing: leaf_hash = SHA-256(0x00 || data), node_hash = SHA-256(0x01 || left || right). This is a low-effort fix that eliminates the second-preimage attack class entirely.
+
+F-11 [MEDIUM] FIPS=Enabled silently falls back to non-FIPS RNG without audit log
+Location: crates/crypto-core/src/signature.rs — Ed25519KeyPair::generate_with_mode()
+When RUST_FIPS=1 (Enabled mode, not Strict), entropy failure silently falls back to StdRng::from_entropy() with only an eprintln! warning. In a production system this warning may be invisible (redirected to /dev/null, swallowed by log aggregators). A FIPS compliance audit would not detect this degradation.
+FipsMode::Enabled => {
+    eprintln!(&quot;WARNING: OS entropy unavailable, using fallback RNG (non-FIPS): {}&quot;, e);
+    Self::generate_fallback()  // No structured log, no audit event, no metric
+}
+
+Recommendation: Emit a structured tracing::warn! event with a dedicated event type (e.g., crypto.fips_fallback). Expose a Prometheus metric counter for FIPS fallback events. Consider making the default mode Strict for production deployments.
+
+F-12 [MEDIUM] Daily publication date derived from server wall clock only
+Location: services/api-service/src/handlers.rs — publish_daily()
+The publication date is generated with chrono::Utc::now().format(&quot;%Y-%m-%d&quot;). There is no check for duplicate publications for the same date, no monotonicity enforcement, and no protection against a clock rollback causing two different daily publications to share a date label. Clock skew in containerized environments (NTP misconfiguration, VM migration) could result in split-brain publication states.
+Recommendation: Add a check that no publication for today&apos;s date already exists before writing. Store the publication timestamp as a signed monotonic counter or use a distributed lock. Return HTTP 409 Conflict on duplicate publish attempts.
+
+F-13 [LOW] Unauthenticated health and readiness endpoints
+Location: services/api-service/src/main.rs — /health and /ready
+The /health and /ready endpoints are outside all authentication middleware and return version strings and engine readiness state. While this is common practice, the rule_count and version fields provide reconnaissance value to unauthenticated users. In a zero-trust perimeter, even these endpoints should be behind network policy controls.
+Recommendation: Strip version information from /health responses in production (or gate it on an internal network check). Ensure Kubernetes NetworkPolicy and Cilium policies restrict /health to the load balancer/ingress IP range only.
+
+F-14 [LOW] Rate limiter state is in-memory and not shared across replicas
+Location: services/api-service/src/middleware.rs — IpRateLimiter
+The IP rate limiter uses a tokio::sync::Mutex<HashMap> scoped to a single process. In a horizontally-scaled deployment (Kubernetes HPA), each replica maintains independent rate limit windows. An attacker can distribute requests across replicas to multiply the effective per-IP limit by the number of running instances.
+Recommendation: Replace with a Redis-backed rate limiter (e.g., redis-cell or a sliding window counter via INCR/EXPIRE). The IpRateLimiter trait abstraction is already in place — add a RedisRateLimiter implementation behind the same interface.
+
+F-15 [LOW] Suppressed advisory RUSTSEC-2025-0134 without confirmed mitigation
+Location: deny.toml
+The deny.toml configuration suppresses RUSTSEC-2025-0134 (a rustls-pemfile advisory) with the comment &apos;migration tracked.&apos; There is no issue tracker reference, no target remediation date, and no evidence that the upstream fix has been assessed. Suppressed advisories can easily be forgotten.
+Recommendation: Add an explicit issue URL in the reason field. Set a review date. Run cargo deny check advisories as a blocking step in CI with a hard deadline for the suppression to expire.
+
+F-16 [LOW] legal_basis hardcoded to &apos;UNSPECIFIED&apos; in all audit entries
+Location: services/api-service/src/handlers.rs — build_audit_log_entry()
+Every audit log entry is stamped with legal_basis: &apos;UNSPECIFIED&apos;. For a system targeting GDPR/CNIL compliance in French government deployments, a meaningful legal basis (e.g., &apos;LEGITIMATE_INTEREST&apos;, &apos;PUBLIC_TASK&apos;, &apos;LEGAL_OBLIGATION&apos;) must be recorded per operation type. This is a compliance gap, not just cosmetic.
+Recommendation: Derive legal_basis from request context (e.g., mission_type, agent_org, query_type). Add it as a required field in ValidationRequest so callers are forced to supply it explicitly. Map to a controlled vocabulary defined in the compliance policy.
+
+F-17 [LOW] No Axum request body size limit
+Location: services/api-service/src/main.rs — app builder
+The Axum router has no RequestBodyLimit layer. An attacker with AGENT credentials can upload arbitrarily large POST bodies to /api/v1/validate, consuming memory and potentially causing OOM in the pod. Combined with F-07 (no field length limits), the attack surface is meaningful.
+Recommendation: Add tower_http::limit::RequestBodyLimitLayer with a conservative limit (e.g., 64KB for validation endpoints) to the API v1 router.
+
+F-18 [INFO] Mock crypto provider accessible in test/debug builds
+Location: crates/pqcrypto/src/kem.rs and signature.rs
+The mock backend guard only panics in non-debug release builds. In debug (dev) builds, the mock provider is silently available without any runtime warning. While this is acceptable for unit tests, it means that a developer who accidentally deploys a debug build to a staging environment will run with non-cryptographic mock signatures without any obvious indication.
+Recommendation: Add a tracing::warn!(&quot;PQ crypto mock backend active&quot;) log line at Kyber::new() and Dilithium::new() initialization when the mock provider is selected, even in debug builds. This makes mock usage immediately visible in any log stream.
+
+
+4. Security Strengths
+The following practices were observed and reflect good security engineering:
+
+Zeroize on drop: All key material structs (Ed25519KeyPair, KyberSecretKey, DilithiumSecretKey, HybridKeyPair) correctly implement Zeroize and ZeroizeOnDrop, ensuring keys are scrubbed from memory when they go out of scope.
+TLS 1.3 enforcement: The TLS module restricts protocol versions to TLS 1.3 only using ServerConfig::builder_with_protocol_versions(&[&TLS13]). Older protocols are not available.
+Panic-on-abort in release: The release profile sets panic = &quot;abort&quot;, preventing stack unwinding-based attacks and ensuring the process terminates cleanly on unexpected errors.
+LTO and single codegen unit: The release profile uses lto = &quot;fat&quot; and codegen-units = 1, maximizing inlining and eliminating dead code — both beneficial for security (fewer attack surfaces) and auditability.
+SoftHSM production guard: create_hsm_session() correctly rejects SoftHSM in environments where ENV/APP_ENV/RUST_ENV is set to &apos;production&apos;, preventing accidental use of the software simulator.
+Hash chain integrity: The immutable log chain correctly implements hash chaining with previous_hash linkage, schema-prefixed canonical serialization, and tamper detection via verify_content_hash().
+Proof binding with policy hash: The compiled rule proof system correctly hashes the policy AST (hash_policy_ast) and binds it to the evaluation context, decision, and bytecode hash, making proof forgery computationally infeasible.
+Rate limiting with Retry-After: The rate limiter correctly returns HTTP 429 with a Retry-After header — useful for legitimate clients and compliant with RFC 6585.
+Strict mode engine: The CrueEngine strict_mode flag defaults to true, causing the engine to block on any rule evaluation error rather than silently allowing access.
+deny.toml supply chain policy: unknown-registry and unknown-git sources are denied. Only crates.io is trusted, reducing supply chain attack surface.
+
+
+5. Remediation Priority Matrix
+Recommended remediation sequence based on exploitability and blast radius:
+
+Priority
+Finding
+Action
+Effort
+Deadline
+P1
+F-01, F-02
+JWT: enforce aud/iss; migrate to Ed25519/RS256
+Low (< 1 day)
+Before prod deploy
+P1
+F-03
+Implement JCS canonical serialization for publication payload
+Medium (1-2 days)
+Before prod deploy
+P1
+F-04
+Trusted proxy CIDR allowlist for X-Forwarded-For
+Low (< 1 day)
+Before prod deploy
+P2
+F-05
+Constant-time comparison in SoftHSM verify()
+Low (2 hours)
+Next sprint
+P2
+F-07, F-17
+Input size limits + RequestBodyLimitLayer
+Low (2-4 hours)
+Next sprint
+P2
+F-10
+Merkle leaf/node domain separation (0x00/0x01 prefix)
+Low (1 hour)
+Next sprint
+P3
+F-06
+Document env var risk; enforce HSM in prod Helm values
+Low (config)
+Next release
+P3
+F-08
+Extend auth tag to 32 bytes
+Trivial (< 1 hour)
+Next release
+P3
+F-11, F-16
+Structured FIPS fallback log; legal_basis from request context
+Medium (1 day)
+Next release
+P4
+F-12, F-13, F-14, F-15, F-18
+Clock/duplicate guard; health info strip; Redis rate limiter; advisory review; mock warning
+Medium (2-3 days)
+Backlog
+
+
+6. Conclusion
+R-SRP v0.9.7 is a technically sophisticated platform with a strong cryptographic foundation. The use of post-quantum hybrid cryptography, hash-chained immutable logs, and a deterministic bytecode VM for policy evaluation places it well ahead of most comparable systems in terms of long-term auditability and tamper evidence.
+
+The primary concerns identified are not fundamental architectural flaws but rather implementation gaps in the authentication layer (JWT) and serialization invariants (canonical JSON) that must be addressed before exposing the system to adversarial traffic. The remediation effort for the P1 findings is estimated at 2-4 engineering days.
+
+Upon completion of P1 and P2 remediations, the system would be suitable for a formal penetration test and certification assessment (e.g., CSPN, Common Criteria EAL2). We recommend scheduling a follow-up audit after P1 remediation is merged to verify closure.
+
+Next Steps
+1. Assign F-01, F-02, F-03, F-04 to a developer for immediate remediation.  2. Create tracking tickets for P2-P4 findings with target sprint assignments.  3. Add mandatory cargo deny check advisories as a CI gate.  4. Schedule follow-up review in 30 days.
+
+— END OF REPORT —
+
+

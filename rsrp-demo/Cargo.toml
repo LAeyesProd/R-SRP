@@ -1,0 +1,21 @@
+[package]
+name = "rsrp-demo"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+publish = false
+
+[features]
+default = []
+real-crypto = ["rsrp-pqcrypto/real-crypto"]
+mock-crypto = ["rsrp-pqcrypto/mock-crypto"]
+production = ["real-crypto", "rsrp-pqcrypto/production"]
+
+[dependencies]
+chrono = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+rsrp-policy-dsl = { version = "0.9.9", path = "../crates/crue-dsl" }
+rsrp-proof-engine = { version = "0.9.9", path = "../crates/crue-engine", features = ["pq-proof"] }
+rsrp-pqcrypto = { version = "0.9.9", path = "../crates/pqcrypto" }
+rsrp-immutable-ledger = { version = "0.9.9", path = "../crates/immutable-logging" }
+crypto-core = { package = "rsrp-security-core", version = "0.9.9", path = "../crates/crypto-core" }

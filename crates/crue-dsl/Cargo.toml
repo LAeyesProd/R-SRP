@@ -1,0 +1,46 @@
+# RSRP Policy DSL - Declarative rules parser and compiler
+#
+# Compiled declarative rules for access control.
+
+[package]
+name = "rsrp-policy-dsl"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Compiled policy DSL for deterministic access-control and proof-oriented rule execution"
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "README.md"
+documentation = "https://docs.rs/rsrp-policy-dsl"
+
+[lib]
+name = "crue_dsl"
+
+[package.metadata.aliases]
+# Future: rsrp-policy-dsl = "crue-dsl"
+
+[features]
+default = ["std"]
+std = []
+# Enable strict validation
+strict = []
+
+[dependencies]
+thiserror = "1.0"
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+uuid = { version = "1.7", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+tracing = "0.1"
+signature = "2.2"
+ed25519-dalek = "2.1"
+
+[dev-dependencies]
+tempfile = "3.8"
+assert_cmd = "2.0"
+predicates = "3.0"

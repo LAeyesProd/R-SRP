@@ -1,0 +1,10 @@
+7a280f988f159fbc2ee0373c6152f8a71dbdc446c807c39cc23b188f47a00fba  docs/CERTIFICATION_BUNDLE.md
+1b4b6cadc947c75956ec23a56e34630b4e33325cb377ca1fb87042231689beb9  docs/RELEASE_NOTES_v1.1.0-hardened.md
+3eeac99e789be1c796bc8823fcb8c317aa60130049da85902e8dfe8c601a90f5  release-artifacts/v1.1.0-hardened/R-SRP-v1.1.0-hardened-src.tar.gz
+9444ec31bdb0cf655fc530dabfe3bda3cef8e2dd6fadf42ca1b3ecdb34a562d6  release-artifacts/v1.1.0-hardened/sbom_crates_crue-dsl.cdx.json
+e5da5781f65f887272d08019ae4e49bbfcac2e670f290ef76c24313ebd62254c  release-artifacts/v1.1.0-hardened/sbom_crates_crue-engine.cdx.json
+178f571fa0cba6fbf1b517a15f91cd42579f579990266361edff89d66d944e3e  release-artifacts/v1.1.0-hardened/sbom_crates_crypto-core.cdx.json
+dfb8a99a9aada37b78bf8bac947cda8f6d69927c36fe8bbc70ee0805a7a4f4f0  release-artifacts/v1.1.0-hardened/sbom_crates_immutable-logging.cdx.json
+f07996506be143de4ea3ec48f007943ee601343e10b2330596b907a12d44fffa  release-artifacts/v1.1.0-hardened/sbom_crates_pqcrypto.cdx.json
+cf1f72654b9c5a2547af4575b21cab9859f4b1b522d50c475e4b6d889a022ccc  release-artifacts/v1.1.0-hardened/sbom_rsrp-demo.cdx.json
+59f39c7b8bf0441c3d2c08730cf435d1af49291ba941a4c3b3cee14b10df3d55  release-artifacts/v1.1.0-hardened/sbom_services_api-service.cdx.json

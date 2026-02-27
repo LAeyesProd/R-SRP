@@ -1,0 +1,368 @@
+ 
+ RAPPORT D'AUDIT APPROFONDI 
+ Criteres CSPN & EUCC — Profil Substantiel 
+ 
+ Cible d'evaluation : R-SRP (Rsrp Security Proof Platform) 
+ Version : 0.9.9 | Date de l'audit : 27 fevrier 2026 
+ Auditeur : Claude (Anthropic) | Commanditaire : Rsrp Systems 
+ Classification : CONFIDENTIEL — Usage interne et auditeurs certifies uniquement 
+ 
+ Verdict global CSPN 
+ CONDITIONNEL 
+ Readiness EUCC Substantiel 
+ PRE-CONFORME (6 points ouverts) 
+ Score synthetique global 
+ 3.6 / 5.0 
+ 
+ 1. Preambule et Perimetre 
+ 1.1 Contexte de l'audit 
+ Le present rapport constitue un audit de securite approfondi du produit R-SRP (Rsrp Security Proof Platform), version 0.9.9, realise selon les referentiels CSPN (Certification de Securite de Premier Niveau, ANSSI) et EUCC (European Common Criteria-based Cybersecurity Certification Scheme, ENISA/ECCC). L'objectif est d'evaluer la readiness de la solution pour une certification de niveau Substantiel. 
+ L'audit couvre l'analyse statique complete du code source Rust, l'examen de l'architecture cryptographique, la verification des politiques de supply chain, la revue des mecanismes d'autorisation, et la conformite aux exigences documentaires de la cible de securite (Security Target, ST). 
+ 1.2 Perimetre de l'evaluation (TOE) 
+ Composants inclus dans la cible d'evaluation : 
+ rsrp-security-core (crates/crypto-core) — Primitives cryptographiques : Ed25519, SHA-256/512, BLAKE3, HMAC, Merkle, entropie 
+ rsrp-pqcrypto (crates/pqcrypto) — Cryptographie post-quantique hybride : ML-KEM-768 / ML-DSA-65 + X25519/Ed25519 
+ rsrp-immutable-ledger (crates/immutable-logging) — Journal immuable chaine et preuves d'inclusion O(log n) 
+ rsrp-policy-dsl / crue-dsl (crates/crue-dsl) — DSL de politique de securite 
+ rsrp-proof-engine / crue-engine (crates/crue-engine) — Moteur de preuve deterministe 
+ api-service (services/api-service) — Service API REST (Axum), authentication JWT EdDSA, TLS 1.3 mTLS, RBAC temporel 
+ 1.3 Documents de reference 
+ ANSSI — Guide CSPN, version 1.5 
+ ENISA — EUCC Scheme, Article 51 (Acte Delegue) 
+ NIST FIPS 140-3 (profil entropie et primitives) 
+ NIST FIPS 203 (ML-KEM), FIPS 204 (ML-DSA) 
+ docs/SECURITY_TARGET.md v0.9.9 
+ docs/THREAT_MODEL.md, THREAT_MODEL_STRIDE.md 
+ docs/KEY_LIFECYCLE_POLICY.md, SUPPLY_CHAIN_POLICY.md 
+ Cargo.lock, deny.toml, .github/workflows/ 
+ 
+ 2. Tableau de Bord Synthetique 
+ Le tableau ci-dessous recapitule l'evaluation par domaine selon l'echelle CSPN (1 = non conforme, 5 = conforme et robuste). La cotation EUCC Substantiel exige un minimum de 3 dans tous les domaines sans failing sur aucun critere critique. 
+ 
+ Domaine d'évaluation 
+ Score /5 
+ Niveau 
+ Observation clé 
+ Architecture et modele de menaces 
+ 4 / 5 
+ Satisfaisant 
+ ST claire, STRIDE complet, limites bien posees 
+ Cryptographie classique 
+ 4 / 5 
+ Satisfaisant 
+ Ed25519 + SHA-2/BLAKE3, zeroization, pas de RSA actif 
+ Cryptographie post-quantique (hybride) 
+ 3.5 / 5 
+ Acceptable 
+ ML-KEM-768 / ML-DSA-65 identifie ; backend mock en CI 
+ Gestion des cles et secrets 
+ 3 / 5 
+ Acceptable 
+ Zeroization presente, SoftHSM uniquement ; HSM reel absent 
+ Entropie et aleatoire 
+ 3.5 / 5 
+ Acceptable 
+ getrandom + health check ; fallback silencieux en mode Disabled 
+ Authentification et autorisation 
+ 4.5 / 5 
+ Tres satisfaisant 
+ JWT EdDSA only, RBAC temporel fail-closed, mTLS TLS 1.3 
+ Journal immuable et preuves 
+ 4.5 / 5 
+ Tres satisfaisant 
+ Chaine SHA-256 prefixee, preuves O(log n) verifiees 
+ Supply chain et pipeline CI/CD 
+ 3.5 / 5 
+ Acceptable 
+ cargo-deny + SBOM + provenance ; advisory RUSTSEC-2025-0134 ouvert 
+ Documentation et traçabilite 
+ 4 / 5 
+ Satisfaisant 
+ ST, STRIDE, matrice de traçabilite, registre hypotheses 
+ Tests et couverture de securite 
+ 3.5 / 5 
+ Acceptable 
+ Tests unitaires cryptographiques bons ; fuzzing partiel, pas de couverture formelle 
+ SCORE GLOBAL 
+ 3.6 / 5.0 
+ PRE-CONFORME 
+ 6 points ouverts a corriger avant soumission 
+ 
+ 3. Analyse Architecturale 
+ 3.1 Modele de menaces — Evaluation STRIDE 
+ Le document THREAT_MODEL.md v0.9.9 est bien structure et couvre les 5 categories d'acteurs malveillants (AM-01 a AM-05) avec une matrice STRIDE explicite. Les frontieres de confiance B-01 a B-06 sont correctement definies et cartographiees aux controles implementes. 
+ Points forts identifies : 
+ Traitement explicite de l'attaquant AM-05 (hostile-host) avec separation des garanties cryptographiques et des garanties operationnelles — approche mature. 
+ Mapping threat-to-FSR-to-code bi-directionnel dans SECURITY_TARGET.md (section TSS) : chaque menace est tracee jusqu'au module source et au test unitaire correspondant. 
+ Analyse d'attack-potential (competence/temps/equipement/opportunite) conforme au format EVA.1 de Common Criteria. 
+ Points d'attention : 
+ T7 (DoS par flood) : le rate-limiter est en memoire (IpRateLimiter, middleware.rs). Il n'est pas distribue — inefficace en deploiement multi-noeud ou derriere un load balancer. La cible de securite ne documente pas cette limitation. Voir finding AUDIT-07. 
+ T6 (fingerprinting) : mentionne dans la ST mais pas de test automatise verifiant que les endpoints de healthcheck et readiness ne fuitent pas d'informations sensibles en production. 
+ 3.2 Frontieres cryptographiques 
+ L'architecture separe correctement les couches : crypto-core (primitives classiques), pqcrypto (hybride PQ), immutable-logging (ledger), crue-engine (politique) et api-service (surface d'exposition). Cette separation facilitate l'evaluation unitaire de chaque composant. 
+ La feature-gate production dans Cargo.toml de rsrp-pqcrypto enforce a la compilation que le backend mock ne peut pas coexister avec real-crypto, et que seuls ML-KEM-768 + ML-DSA-65 sont actifs. Cette approche de secure-by-construction est bien alignee avec le principe de separation de configuration CSPN. 
+ 
+ 4. Cryptographie Classique — Analyse Approfondie 
+ 4.1 Primitives de signature (Ed25519) 
+ Le module crates/crypto-core/src/signature.rs implemente Ed25519 via la crate ed25519-dalek v2.1, une bibliotheque reconnue et activement maintenue. L'analyse du code revele les points suivants : 
+ Positif : La structure Ed25519KeyPair derive Zeroize + ZeroizeOnDrop, assurant l'effacement automatique du materiel secret (secret_seed: [u8; 32]) a la destruction de l'objet. Le test test_ed25519_private_seed_zeroize valide ce comportement de facon explicite. FSR-05 est satisfait. 
+ Positif : La derivation deterministe via HKDF-SHA256 (derive_from_secret) utilise un label de contexte canonique 'rsrp-security-core-ed25519-v1', protegeant contre la reutilisation croisee de materiel de cle. 
+ Risque : En mode FIPS Disabled (defaut), l'echec de OsRng provoque une chute silencieuse sur StdRng::from_entropy(). Bien que StdRng se seed depuis l'OS, ce fallback n'est pas documente dans la cible de securite et n'est pas conforme FIPS 140-3. Voir finding AUDIT-01. 
+ Risque : La fonction generate_with_hsm retourne systematiquement une erreur 'HSM integration not implemented'. La cible de securite mentionne le support HSM (Thales Luna, Utimaco) mais ce chemin de code n'est pas fonctionnel. Voir finding AUDIT-02. 
+ 4.2 Hachage 
+ SHA-256, SHA-512 et BLAKE3 sont implementes via les crates sha2 v0.10 et blake3 v1.5 (version tres recente). L'HMAC-SHA256 est presente et correctement structuree (new_from_slice). Aucune anomalie detectee. 
+ Le module hash_concat (utilise pour le Merkle tree) concatene les blocs sequentiellement dans un seul digest, ce qui est conforme — les prefixes de domaine (CHAIN_PROOF_LEAF_PREFIX 0x02, CHAIN_PROOF_NODE_PREFIX 0x03) dans chain.rs assurent la separation feuille/noeud, protegeant contre les attaques de second preimage sur l'arbre Merkle. 
+ 4.3 Merkle Tree 
+ L'implementation du Merkle tree dans chain.rs est particulierement soignee : separation de domaine avec prefixes 0x02/0x03, preuves d'inclusion O(log n) avec verification bidirectionnelle (target + head), et tests unitaires verifiant la taille logarithmique des preuves. FSR-03 et FSR-04 sont satisfaits. 
+ Attention : Lorsque l'arbre a un nombre impair de feuilles, le dernier noeud est duplique (right = left si chunk.len() == 1). Ce comportement, commun dans les implementations Bitcoin-style, est acceptable mais doit etre documente explicitement dans MERKLE_SECURITY_MODEL.md pour l'evaluateur CSPN. Voir finding AUDIT-05. 
+ 
+ 5. Cryptographie Post-Quantique — Analyse Approfondie 
+ 5.1 Architecture hybride 
+ Le module crates/pqcrypto/src/hybrid.rs implemente un schema de signature hybride Ed25519 + ML-DSA et un schema KEM hybride X25519 + ML-KEM. La construction hybride est correcte dans son principe : les deux composantes doivent verifier independamment (classical_valid && quantum_valid), ce qui garantit que compromettre une seule primitive ne suffit pas. 
+ Positif : La separation de domaine dans hybrid_signature_payload() ('rsrp-hybrid-signature-v1' + longueur du message en big-endian 4 octets) protege contre les attaques de type cross-protocol replay. 
+ Positif : La derivation du secret hybride KEM utilise HKDF-SHA256 avec un sel contextuel ('rsrp-hybrid-kem-v1') et encode la longueur des deux composantes (length-prefixed IKM), ce qui est une construction sure conformement aux recommandations IETF. 
+ Positif : Le derive_classical_auth_tag() lie la composante classique X25519 a la composante quantique Kyber via SHA-256, protegeant contre le remplacement independant d'une composante du ciphertext hybride. Les tests test_hybrid_kem_rejects_tampered_classical_component et _quantum_component valident ce comportement. 
+ 5.2 Backend mock en environnement CI 
+ Risque majeur : Le MockProvider (Dilithium) et le MockKemProvider (Kyber) sont des implementations deterministes basees sur SHA-256 — ils ne sont pas de veritables implementations ML-DSA / ML-KEM. La protection en production repose sur la feature-gate release qui interdit mock-crypto, mais les tests d'integration CI s'executent avec le backend mock. Cela signifie que les vecteurs de test ne couvrent pas le comportement reel du backend OQS. Voir finding AUDIT-03. 
+ 5.3 Niveaux de securite 
+ La production feature fixe ML-KEM-768 (securite ~192 bits quantiques) et ML-DSA-65 (securite ~192 bits). Ces niveaux sont conformes aux recommendations ANSSI pour la protection de donnees a l'horizon 2030 et superieurs au niveau minimal EUCC Substantiel. Le freeze compile-time via compile_error! est une garantie forte. 
+ Observation : Kyber512 (ML-KEM-512, ~128 bits) reste accessible en mode non-production. Bien que proteges par la feature-gate, les tests avec Kyber512 pourraient induire une fausse securite dans les rapports de couverture. Recommande de labelliser explicitement ces tests comme 'non-production'. 
+ 
+ 6. Gestion des Cles et Integration HSM 
+ 6.1 SoftHSM 
+ Le module crates/crypto-core/src/hsm.rs fournit une abstraction HsmSession avec une implementation SoftHSM pour les tests. La protection de production repose sur is_production_environment() qui detecte les variables ENV/APP_ENV/RUST_ENV a valeur 'prod' ou 'production'. 
+ Risque : La detection d'environnement repose sur des variables d'environnement non signees — un operateur malveillant ou une erreur de configuration peut laisser SoftHSM actif en production sans que le systeme ne le detecte si la variable n'est pas positionnee. Ce mecanisme de protection est fragile. Voir finding AUDIT-02. 
+ Risque : La cle privee Ed25519 est stockee en memoire dans le HashMap<String, Vec<u8>> de SoftHsm.keys sans protection supplementaire (pas de SecretBox, pas de mlock). En contexte de cible de securite avec adversaire AM-05 (hostile-host), ce point est mentionne comme limitation mais pas documente formellement. 
+ 6.2 Backends HSM reels 
+ Les types HsmType::ThalesLuna, ::Utimaco, ::AwsCloudHsm, ::AzureKeyVault sont definis mais retournent Err('HSM type not implemented') dans create_hsm_session. La ST mentionne ces integrations dans la section Scope sans mentionner qu'elles sont non implementees. Cela constitue un gap documentaire majeur pour la certification. 
+ La KEY_LIFECYCLE_POLICY.md doit etre mise a jour pour refleter l'etat actuel : absence d'integration HSM reelle, avec une roadmap datee vers Thales Luna ou AWS CloudHSM. 
+ 6.3 Entropie 
+ Le module entropy.rs effectue deux echantillons de 32 octets via getrandom et verifie : (1) non-zero, (2) non-identiques. Cette verification est necessaire mais insuffisante pour une auto-evaluation FIPS 140-3 complete (les tests NIST SP 800-90B requierent des echantillons beaucoup plus larges). Acceptable pour le niveau CSPN/Substantiel si documente comme verification de disponibilite et non comme test de qualite statistique. 
+ Risque : En mode FipsMode::Disabled, l'echec de OsRng ne provoque aucun log — le fallback sur StdRng::from_entropy() est silencieux. Un echec d'entropie en production passerait inapercu. Voir finding AUDIT-01. 
+ 
+ 7. Authentification, Autorisation et Controles d'Acces 
+ 7.1 JWT EdDSA 
+ Le module auth.rs impose exclusivement l'algorithme EdDSA pour les tokens JWT, rejetant HS256 et RS256 avec un message d'erreur explicite. La validation exige iss, aud et exp dans les required_spec_claims. Cette configuration est robuste et conforme aux recommandations ANSSI contre les attaques d'algorithme JWT (alg:none, confusion HS256/RS256). 
+ Positif : La verification en-tete (decode_header) precede la verification de signature, et l'algorithme est re-verifie dans header.alg != Algorithm::EdDSA apres parsing — protection contre les attaques de substitution d'algorithme. 
+ Observation : Le mecanisme de rotation de cle (kid) est presente (HashMap<String, DecodingKey>) mais la strategie de rotation (duree de vie, revocation) n'est pas documentee dans la ST. Recommande d'ajouter un paragraphe dans KEY_LIFECYCLE_POLICY.md. 
+ 7.2 RBAC Temporel 
+ Le module mission_schedule.rs implemente un RBAC temporel (jours/heures UTC) avec une politique strictement fail-closed : en l'absence de MISSION_SCHEDULE_PATH, l'acces est refuse. Ce comportement est correctement documente et teste. 
+ Positif : La validation du JSON de configuration rejette les mission_id vides, les plages horaires invalides et les jours hors [1-7]. Aucun chemin de configuration silencieusement incorrect. 
+ Observation : L'evaluation temporelle utilise l'heure UTC du serveur systeme — si le serveur est compromis par une derive NTP hostile, les fenetres d'acces pourraient etre manipulees. Recommande de documenter la dependance NTP dans les hypotheses operationnelles (ASSUMPTIONS_REGISTER.md). 
+ 7.3 TLS 1.3 et mTLS 
+ Le module tls.rs force exclusivement TLS 1.3 via l'API Rustls (&[&TLS13]). Le mode mTLS (WebPkiClientVerifier) est supporte avec un CA configurable. La validation rejette les chaines de certificats vides et les cles privees vides. 
+ Positif : La logique de parsing distingue PEM et DER sans fallback silencieux. En mode mTLS, allow_unauthenticated() est uniquement accessible si enforce_mtls est false — la configuration par defaut (client_ca present) active le mTLS strict. 
+ Observation : La validation SPIFFE-style (uri-SAN) mentionnee dans l'architecture n'est pas implementee dans le code — la verification se limite a WebPki (X.509 standard). Si un Zero-Trust SPIFFE est requis, ce gap doit etre documente. Voir finding AUDIT-06. 
+ 
+ 8. Securite de la Supply Chain 
+ 8.1 Gestion des dependances 
+ Le fichier deny.toml configure cargo-deny avec : allowlist de licences (Apache-2.0, MIT, BSD-*, EUPL-1.2), rejet des sources non-registre (unknown-registry = deny, unknown-git = deny), avertissement sur les versions multiples (multiple-versions = warn), et refus des wildcards de version (wildcards = deny). Cette configuration est rigoureuse. 
+ Risque ouvert : L'advisory RUSTSEC-2025-0134 est ignore dans [advisories] avec un commentaire de justification (DR-001, echéance 2026-03-31). A la date de l'audit, cet advisory est actif. L'echeance de revue doit etre respectee. Voir finding AUDIT-04. 
+ Positif : Le Cargo.lock est commis et les workflows CI utilisent --locked, garantissant la reproductibilite des dependances entre environnements. 
+ 8.2 SBOM et provenance 
+ Les workflows .github/workflows/sbom.yml, signing.yml, reproducible-build.yml et production-gate.yml couvrent la generation de SBOM (CycloneDX ou SPDX), la signature des artefacts (cosign), et la verification de reproductibilite des binaires. La structure est bien pensee. 
+ Observation : Les workflows ne sont pas executables dans cet audit (pas d'acces au repo actif), leur contenu declaratif est verifie mais pas leur comportement runtime. Pour la certification EUCC, un rapport d'execution des workflows sur les derniers 6 mois doit etre fourni. 
+ 8.3 Profil de securite de production 
+ La feature-gate production dans crates/pqcrypto/src/lib.rs utilise compile_error! pour rejeter les combinaisons mock+real, production+mock, et les niveaux cryptographiques non-conformes. Cette approche secure-by-construction est exemplaire et directement traçable a FSR-07. 
+ 
+ 9. Findings de Securite 
+ Les findings suivants sont classes par severite decroissante. La cotation suit l'echelle CVSS 3.1 simplifiee (Critique, Eleve, Moyen, Faible, Informatif). 
+ 
+ Finding ID 
+ AUDIT-01 
+ Sévérité 
+ ELEVE 
+ Titre 
+ Fallback silencieux d'entropie en mode FipsMode::Disabled 
+ Description 
+ Dans signature.rs, la methode generate() appelle generate_with_mode(FipsMode::default()). Lorsque RUST_FIPS n'est pas positionne, FipsMode::Disabled est actif. Si OsRng echoue, la generation tombe silencieusement sur StdRng::from_entropy() sans log d'avertissement ni arret d'urgence. Ce chemin de fallback n'est pas conforme FIPS 140-3 et n'est pas documente dans la Security Target. 
+ Impact 
+ Un echec d'entropie OS en production (ex: /dev/urandom non disponible lors du boot) produirait des cles generees depuis un RNG potentiellement degradé sans alerte. Pour un systeme de preuve a haute valeur, ce risque est inacceptable. 
+ Recommandation 
+ Positionner FipsMode::Enabled comme valeur par defaut, ou supprimer le fallback silencieux. En cas d'echec OsRng, logger au niveau ERROR et propager une erreur. Documenter le comportement dans ENTROPY_BOUNDARY.md et la ST section FSR-06. 
+ Statut 
+ OUVERT — Correction requise avant soumission CSPN. 
+ 
+ Finding ID 
+ AUDIT-02 
+ Sévérité 
+ ELEVE 
+ Titre 
+ Integration HSM reelle absente — gap entre Security Target et implementation 
+ Description 
+ La Security Target liste Thales Luna HSM, Utimaco, AWS CloudHSM, Azure Key Vault comme backends supportes. Le code dans hsm.rs retourne systematiquement Err('HSM type not implemented') pour tous ces backends. Seul SoftHSM est fonctionnel. La protection anti-SoftHSM-en-production repose sur la detection de variables d'environnement non authentifiees. 
+ Impact 
+ Si la ST est soumise en l'etat a l'ANSSI/ENISA, l'ecart entre les claims et l'implementation sera identifie comme non-conformite majeure. La protection basee sur ENV est contournable par une erreur operationnelle. 
+ Recommandation 
+ Soit limiter les claims de la ST aux backends actuellement implémentes (SoftHSM en test, aucun HSM reel), soit implémenter au moins un backend reel (ex: PKCS#11 via cryptoki-rs) avant soumission. Documenter la roadmap HSM dans KEY_LIFECYCLE_POLICY.md avec jalons dates. 
+ Statut 
+ OUVERT — Critique pour la recevabilite de la ST. 
+ 
+ Finding ID 
+ AUDIT-03 
+ Sévérité 
+ MOYEN 
+ Titre 
+ Tests CI avec backend mock PQ — vecteurs de test non representatifs 
+ Description 
+ Le MockProvider Dilithium et MockKemProvider Kyber sont des constructions SHA-256 deterministes, non conformes a la specification NIST FIPS 203/204. Les tests d'integration et de regression CI utilisent ces mocks. Les proprietes de securite verifiees (taille de signature, rejet d'alteration) ne couvrent pas le comportement reel de liboqs/OQS. 
+ Impact 
+ Un defaut comportemental du backend OQS (ex: mauvaise serialisation de cle, traitement d'erreur inadequat) pourrait passer inapercu en CI et n'etre detecte qu'en production. Pour EUCC, les tests doivent couvrir le backend de production. 
+ Recommandation 
+ Ajouter un job CI dédié avec la feature real-crypto active (liboqs disponible via Docker ou nix). Executer la suite de tests complete avec ce backend. Les tests avec mock peuvent rester pour la rapidite d'execution mais ne doivent pas etre les seuls vecteurs de validation. 
+ Statut 
+ OUVERT — Recommande avant soumission. 
+ 
+ Finding ID 
+ AUDIT-04 
+ Sévérité 
+ MOYEN 
+ Titre 
+ Advisory RUSTSEC-2025-0134 actif avec echeance non encore atteinte 
+ Description 
+ Le deny.toml ignore RUSTSEC-2025-0134 avec une justification documentee (DR-001) et une echeance de revue au 2026-03-31. Cet advisory est actif au moment de l'audit (27 fevrier 2026). La crate concernee fait partie du chemin de confiance TLS (rustls-pemfile). 
+ Impact 
+ Si l'advisory couvre une vulnerabilite exploitable dans le chemin TLS, l'exposition est directe pour les connexions mTLS. L'echeance de 31 jours est acceptable mais doit etre respectee sans exception. 
+ Recommandation 
+ Documenter l'analyse d'impact de RUSTSEC-2025-0134 dans docs/DEPENDENCY_RISK_ASSESSMENT.md. Planifier la mise a jour de la dependance affectee avant le 2026-03-31. Pour la certification, fournir la preuve que l'advisory a ete evalue et que le vecteur d'attaque est mitige dans le contexte de deploiement. 
+ Statut 
+ OUVERT — Echeance 2026-03-31. 
+ 
+ Finding ID 
+ AUDIT-05 
+ Sévérité 
+ FAIBLE 
+ Titre 
+ Duplication de noeud Merkle pour arbres a taille impaire non documentee 
+ Description 
+ Dans chain.rs, la fonction next_level() duplique le dernier noeud quand le niveau est de taille impaire (right = left si chunk.len() == 1). Ce comportement est courant (style Bitcoin/RFC 6962) mais cree un cas particulier connu ou deux feuilles adjacentes peuvent partager un noeud intermediaire identique, reduisant marginalement la resistance aux attaques de second preimage sur les arbres de petite taille. 
+ Impact 
+ Pour les chaines de faible longueur (1-3 entrees), la securite effective du Merkle tree est legérement reduite. Ce risque est faible dans le contexte d'utilisation mais doit etre documente pour l'evaluateur. 
+ Recommandation 
+ Documenter explicitement le comportement de duplication dans MERKLE_SECURITY_MODEL.md avec une analyse des implications cryptographiques. Envisager une alternative (ex: padding avec un hash neutre, ou structure LLAMT) si la taille de chaine est predictiblement petite. 
+ Statut 
+ OUVERT — Correction documentaire. 
+ 
+ Finding ID 
+ AUDIT-06 
+ Sévérité 
+ FAIBLE 
+ Titre 
+ Validation SPIFFE/SVID non implementee malgré la reference dans l'architecture 
+ Description 
+ La documentation ARCHITECTURE_RNBC_ZeroTrust.md et le Security Target referent a un modele Zero Trust SPIFFE-style pour l'authentification service-a-service. Le code tls.rs utilise WebPkiClientVerifier standard, sans validation de l'URI-SAN SPIFFE ni verification du SVID. Il n'y a pas de gap de securite si le mTLS X.509 standard suffit, mais le claim Zero Trust SPIFFE dans la documentation cree une fausse impression de controle. 
+ Impact 
+ Un evaluateur CSPN confrontant la documentation et le code identifiera ce gap comme une non-conformite documentaire. La credibilite de l'ensemble de la ST peut etre impactee. 
+ Recommandation 
+ Soit implementer la validation URI-SAN SPIFFE dans tls.rs, soit retirer les references SPIFFE de la ST et de l'architecture. Documenter clairement que le modele Zero Trust est base sur mTLS X.509 standard. 
+ Statut 
+ OUVERT — Correction documentaire ou implementaire. 
+ 
+ Finding ID 
+ AUDIT-07 
+ Sévérité 
+ INFORMATIF 
+ Titre 
+ Rate-limiter en memoire — limite en deploiement distribue 
+ Description 
+ L'IpRateLimiter dans middleware.rs est un compteur en memoire par processus. En deploiement multi-noeud (Kubernetes, plusieurs replicas), chaque instance maintient son propre compteur — le rate limit effectif est multiplie par le nombre d'instances. La ST mentionne Kubernetes mais ne documente pas cette limitation. 
+ Impact 
+ Un attaquant peut contourner le rate-limit en distribuant ses requetes sur les differentes instances du service, rendant T7 (DoS) partiellement inefficace. 
+ Recommandation 
+ Documenter la limitation dans la ST (section 9 Residual Risks). Pour une protection complete, integrer un rate-limiter distribue (Redis, DragonflyDB) ou deléguer a un ingress controller (nginx rate_limit, Envoy local_rate_limit). Ce finding est informatif et n'est pas bloquant pour la certification au niveau CSPN. 
+ Statut 
+ OUVERT — Non bloquant, documentaire. 
+ 
+ 10. Tests et Couverture de Securite 
+ 10.1 Tests unitaires cryptographiques 
+ La suite de tests unitaires presente dans chaque module cryptographique est bien construite et couvre les cas critiques : 
+ Verification Ed25519 : sign/verify, rejet de donnees modifiees, determinisme de derive_from_secret, zeroization 
+ Merkle : detection de falsification de preuve, logarithmicite des chemins, coherence chain head 
+ Hybride PQ : rejet de falsification classique uniquement, quantique uniquement, et des deux composantes 
+ KEM hybride : rejet d'alteration des composantes classique et quantique, binding tag 
+ JWT : rejet HS256/RS256, validation iss/aud 
+ Entropie : health check disponibilite OS RNG 
+ 10.2 Fuzzing 
+ Trois cibles de fuzzing sont definies dans fuzz/ : dsl_parser.rs, log_entry_deserialize.rs, proof_envelope_decode.rs. La presence de ces cibles est positive. Cependant, le README de fuzzing ne documente pas le corpus utilise, la duree des campagnes ni les criteres d'arret. Pour l'EUCC, une preuve d'execution de fuzzing avec un corpus minimal de 48h est generalement attendue. 
+ 10.3 Verification formelle 
+ Le workflow .github/workflows/formal-verification.yml est present. Son contenu n'est pas analysable sans execution, mais la presence du fichier indique une intention de verification formelle. Pour la CSPN niveau 1, la verification formelle n'est pas obligatoire mais est valorisee. 
+ 10.4 Vecteurs de test interop 
+ Le dossier scripts/interop/ contient des vecteurs de test en Go, Python et TypeScript pour le format ProofEnvelope v1. Le fichier PROOF_ENVELOPE_V1_TEST_VECTORS.json est present. Cette approche de test d'interoperabilite multi-langage est exemplaire et constitue un point fort pour la certification. 
+ 
+ 11. Conformite EUCC — Analyse par Article 
+ Article 51 — Niveau Substantiel 
+ Le schema EUCC (Reglement d'execution 2024/482) definit trois niveaux : Basique, Substantiel, Eleve. R-SRP cible le niveau Substantiel. L'analyse de conformite par critere : 
+ 
+ Critere EUCC Substantiel 
+ Statut 
+ Commentaire 
+ Security Target conforme CC 
+ CONFORME 
+ ST v0.9.9 structure, TSS complet, mapping FSR-menace-code bi-directionnel 
+ Primitives cryptographiques approuvees 
+ PARTIEL 
+ Ed25519, SHA-2, BLAKE3 : OK. Backend OQS reel requis en production, non teste en CI 
+ Gestion du cycle de vie des cles 
+ PARTIEL 
+ Zeroization presente, HSM reel absent, rotation JWT non documentee 
+ Integrite de la chaine de confiance de build 
+ CONFORME 
+ cargo-deny, SBOM, cosign, reproducible build, production-gate CI 
+ Documentation technique complete 
+ PARTIEL 
+ ST/TM/STRIDE complets. Gaps : HSM roadmap, NTP dependency, SPIFFE claim 
+ Tests de securite avec preuves d'execution 
+ PARTIEL 
+ Tests unitaires complets. Fuzzing sans preuve de campagne. Pas de test OQS reel en CI 
+ Vulnerability management / advisory tracking 
+ PARTIEL 
+ RUSTSEC-2025-0134 actif avec echeance. Processus documente mais non encore clos 
+ Plan de reponse aux incidents 
+ ABSENT 
+ SECURITY.md present mais pas de plan formel IR. Voir recommandation 11.1 
+ 
+ 11.1 Point critique : Plan de reponse aux incidents 
+ L'EUCC Substantiel exige un plan de reponse aux incidents (IR) documentant le processus de signalement des vulnerabilites, les SLAs de correction, les contacts d'urgence et la procedure de notification des autorites (ANSSI, CERT-FR). Le fichier SECURITY.md existe mais ne constitue pas un plan IR complet. Ce point est bloquant pour la certification. 
+ Recommandation : Rediger un document INCIDENT_RESPONSE_PLAN.md couvrant : canaux de signalement securises, SLA par severite (Critique < 24h, Eleve < 72h, Moyen < 30j), procedure d'escalade, contacts CERT-FR, et processus de CVE/disclosure. 
+ 
+ 12. Recommandations Prioritisees 
+ Priorite 1 — Blocants pour la soumission (P1) 
+ Ces points doivent etre resolus avant toute soumission a l'ANSSI ou a l'organisme de certification EUCC. 
+ 
+ P1.1 [AUDIT-02] : Corriger les claims HSM dans la Security Target. Soit implementer un backend PKCS#11 reel, soit retirer les mentions Thales Luna/Utimaco/CloudHSM de la ST et documenter une roadmap datee. 
+ P1.2 [AUDIT-06] : Aligner la documentation Zero Trust SPIFFE avec le code reel (mTLS X.509 standard). Retirer les claims non implementes de la ST. 
+ P1.3 [§11.1] : Rediger un plan de reponse aux incidents complet (INCIDENT_RESPONSE_PLAN.md) avec SLA, escalade, contacts CERT-FR. 
+ Priorite 2 — Recommandes avant soumission (P2) 
+ Ces points ameliorent significativement la posture de securite et la credibilite de la ST. 
+ 
+ P2.1 [AUDIT-01] : Changer le mode FIPS par defaut en FipsMode::Enabled et ajouter un log ERROR en cas de fallback d'entropie. Documenter le comportement dans ENTROPY_BOUNDARY.md. 
+ P2.2 [AUDIT-03] : Ajouter un job CI avec la feature real-crypto (liboqs via nix ou Docker) et executer la suite de tests cryptographiques complete avec le backend OQS. 
+ P2.3 [AUDIT-04] : Resoudre RUSTSEC-2025-0134 avant l'echeance du 2026-03-31. Documenter l'analyse d'impact dans DEPENDENCY_RISK_ASSESSMENT.md. 
+ P2.4 : Documenter la strategie de rotation des cles JWT (duree de vie, revocation) dans KEY_LIFECYCLE_POLICY.md. 
+ P2.5 : Ajouter la dependance NTP comme hypothese operationnelle dans ASSUMPTIONS_REGISTER.md. 
+ Priorite 3 — Ameliorations recommandees (P3) 
+ P3.1 [AUDIT-05] : Documenter le comportement de duplication Merkle pour arbres de taille impaire dans MERKLE_SECURITY_MODEL.md. 
+ P3.2 [AUDIT-07] : Documenter la limitation du rate-limiter en memoire dans la ST (Residual Risks) et prevoir une strategie pour le deploiement multi-noeud. 
+ P3.3 : Fournir des preuves d'execution de fuzzing (corpus, duree de campagne, nombre de crash) pour les trois cibles fuzz/. 
+ P3.4 : Labelliser les tests utilisant Kyber512/Dilithium2 comme 'non-production' dans les reports de couverture. 
+ P3.5 : Ajouter un test automatise verifiant l'absence de fuite d'information sur les endpoints /health et /ready en profil production. 
+ 
+ 13. Conclusion 
+ R-SRP v0.9.9 est un produit de securite a l'architecture globalement rigoureuse et bien pensee. Les fondations cryptographiques (Ed25519, SHA-2, BLAKE3, hybride PQ, journal Merkle) sont implementees avec soin, et la documentation de securite (ST, STRIDE, hypotheses, traçabilite) est d'un niveau rarement atteint pour un produit a ce stade de maturite. 
+ Le principal obstacle a la certification est le gap entre les claims de la Security Target et l'etat reel de l'implementation : les integrations HSM et SPIFFE sont documentees comme si elles etaient fonctionnelles alors qu'elles ne le sont pas. Ce type d'ecart est redhibitoire pour un evaluateur CSPN ou EUCC. 
+ Avec la resolution des 3 points blocants (P1) et l'amelioration des 5 points P2, le produit peut raisonnablement viser une soumission CSPN niveau 1 dans un horizon de 2 a 3 mois, et preparer serieusement une certification EUCC Substantiel dans un horizon de 6 a 9 mois. 
+ 
+ Verdict 
+ Detail 
+ Verdict CSPN 
+ CONDITIONNEL — Certification possible apres resolution des 3 points P1 et 5 points P2 
+ Readiness EUCC Substantiel 
+ PRE-CONFORME — 6 findings a corriger, plan IR a rediger, CI OQS a ajouter 
+ Score global 
+ 3.6 / 5.0 — Architecture solide, documentation quasi-complete, implementation a affiner 
+ Recommandation 
+ Procéder aux corrections P1 dans les 4 semaines, P2 dans les 8 semaines, puis re-audit cible avant soumission 
+ 
+ Rapport etabli le 27 fevrier 2026. 
+ Ce rapport constitue un audit de securite approfondi base sur l'analyse statique du code source et de la documentation fournis. Il ne se substitue pas a une evaluation officielle par un ITSEF agree CSPN ou EUCC. 
+ 

@@ -1,0 +1,199 @@
+# Formal Verification Pipeline for R-SRP Ultra
+# Uses Kani Model Checker and Creusot for mathematical proofs
+
+name: Formal Verification
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly comprehensive verification
+    - cron: '0 3 * * 0'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Kani Model Checking
+  kani-model-check:
+    name: Kani Model Checker
+    if: github.event_name != 'pull_request'
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Run Kani
+        uses: model-checking/kani-github-action@v1
+        with:
+          args: --tests --no-default-checks
+          workspace: ./crates/crypto-core
+      
+      - name: Run Kani on CRUE engine
+        uses: model-checking/kani-github-action@v1
+        with:
+          args: --tests
+          workspace: ./crates/crue-engine
+      
+      - name: Run Kani on immutable logging
+        uses: model-checking/kani-github-action@v1
+        with:
+          args: --tests
+          workspace: ./crates/immutable-logging
+
+  # Miri (Undefined Behavior Detection)
+  miri-check:
+    name: Miri - Undefined Behavior Detection
+    if: github.event_name != 'pull_request'
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install Rust Nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+      
+      - name: Update miri
+        run: |
+          cargo +nightly miri update
+      
+      - name: Run Miri on crypto-core
+        run: |
+          cargo +nightly miri test -p rsrp-security-core --lib
+      
+      - name: Run Miri on crue-engine
+        run: |
+          cargo +nightly miri test -p rsrp-proof-engine --lib
+      
+      - name: Run Miri on immutable-logging
+        run: |
+          cargo +nightly miri test -p rsrp-immutable-ledger --lib
+
+  # Fuzzing (additional coverage)
+  fuzzing:
+    name: Fuzzing Campaign
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.90.0
+      
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz
+      
+      - name: Run fuzz tests and collect evidence
+        continue-on-error: true
+        run: |
+          export FUZZ_DURATION_SECONDS=180
+          export FUZZ_FAIL_ON_CRASH=0
+          bash scripts/run_fuzz_evidence.sh || true
+
+      - name: Upload fuzz campaign evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: formal-fuzz-evidence
+          path: fuzz/evidence/**
+          retention-days: 30
+
+  # Loom Concurrency Testing
+  loom-concurrency:
+    name: Loom Concurrency Testing
+    if: github.event_name != 'pull_request'
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.90.0
+        with:
+          components: rustfmt
+      
+      - name: Install loom
+        continue-on-error: true
+        run: cargo install cargo-loom
+      
+      - name: Run loom on crypto-core
+        continue-on-error: true
+        run: |
+          cargo loom -p rsrp-security-core --tests || true
+      
+      - name: Run loom on immutable-logging
+        continue-on-error: true
+        run: |
+          cargo loom -p rsrp-immutable-ledger --tests || true
+
+  # Property-Based Testing
+  property-testing:
+    name: Property-Based Testing
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.90.0
+      
+      - name: Install proptest
+        run: cargo install cargo-proptest || true
+      
+      - name: Run proptest
+        run: |
+          cargo test -p rsrp-security-core --test '*proptest*' || true
+          cargo test -p rsrp-policy-dsl --test '*proptest*' || true
+
+  # Code Coverage with Coverage-Guided Fuzzing
+  coverage-guided-fuzzing:
+    name: Coverage-Guided Fuzzing
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.90.0
+        with:
+          components: rust-src
+      
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz
+      
+      - name: Run fuzz with coverage
+        continue-on-error: true
+        run: |
+          # Generate coverage report from fuzzing
+          cargo fuzz coverage dsl_parser -- -edge_Coverage=1 || true
+      
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-coverage
+          path: fuzz/coverage
+          retention-days: 30

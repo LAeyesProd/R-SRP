@@ -1,0 +1,100 @@
+[33m1c09a16[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mrelease/v1.1.0-hardened[m[33m, [m[1;31morigin/release/v1.1.0-hardened[m[33m)[m chore(deps): update lockfile and align api-service dependency aliases
+[33m07552e5[m ci: rerun after api-service manifest feature-key fix
+[33m0dc0dc8[m fix(api-service): align tsa feature dependency key and remove invalid thiserror feature
+[33mf071d5f[m ci: rerun checks
+[33mef32233[m fix(api-service): Fix Cargo.toml dependency issues
+[33m7a3d924[m ci(cosign): replace invalid cosign-installer@v6 with v3.7.0
+[33mbd272db[m[33m ([m[1;33mtag: [m[1;33mv1.1.1-hardened[m[33m)[m ci(production-gate): isolate api-service health tests via manifest-path
+[33mde67d3f[m fix(api-service): fail-closed health versioning and CI test target
+[33m45e30c7[m CI: rerun workflows on release/v1.1.0-hardened
+[33mb968e59[m Fix api-service CI dependency graph and tower imports
+[33m0d17f17[m Merge branch 'main' into release/v1.1.0-hardened
+[33m2d7530d[m[33m ([m[1;33mtag: [m[1;33mv1.1.0-hardened[m[33m)[m Hardening: close P3 findings, fuzz evidence, health exposure gating, PQ production labeling
+[33mb305985[m[33m ([m[1;31morigin/main[m[33m)[m Fix/security audit remediation (#17)
+[33mece51cf[m[33m ([m[1;32mfix/security-audit-remediation[m[33m)[m security: close CSPN/EUCC audit gaps (fips, hsm, ci, docs)
+[33m0a5a7dc[m Fix/security audit remediation (#16)
+[33m18a4022[m deps(reqwest): switch to rustls native roots to satisfy deny license policy
+[33m10754cf[m ci: stabilize feature graph checks and cache supply-chain tools
+[33mf9c678f[m deps(reqwest): pin explicit rustls/json/http2 feature set
+[33m5231693[m build: make TSA HTTP transport optional and remove reqwest from default graph
+[33m6e0c9a1[m ci(production-gate): scope lint/check to production crypto core crates
+[33m557b88b[m ci(production-gate): run check first and clippy with --no-deps
+[33m4a7fcf9[m ci(production-gate): isolate cargo env and normalize rust vars
+[33m4257802[m ci(production-gate): refresh cargo registry before clippy
+[33m949fec2[m build(ci): remove non-portable linux linker hardening flags
+[33m2f4bd6b[m ci(production-gate): install clippy component before lint step
+[33m4436236[m Merge branch 'main' into fix/security-audit-remediation
+[33md3c9d41[m docs(cert): align threat model and certification bundle to pre-cert baseline
+[33m0d7a8c4[m Fix/security audit remediation (#15)
+[33mf66f145[m Merge branch 'main' into fix/security-audit-remediation
+[33m1ad8808[m docs(security-target): add TSS, CM, vuln process and attack potential mapping
+[33m40defa4[m[33m ([m[1;33mtag: [m[1;33mv0.9.9[m[33m)[m Release 0.9.9: entropy runtime checks and infra hardening
+[33mad3a521[m Fix/security audit remediation (#14)
+[33m06248f0[m Merge branch 'main' into fix/security-audit-remediation
+[33m9b6cdb3[m Harden security controls and formalize audit traceability
+[33m26b21ed[m Fix/security audit remediation (#13)
+[33m82b2dfa[m pqcrypto: remove dead_code warnings on mock backend notifier
+[33mf0a9ea1[m ci: avoid false negatives by compiling pqcrypto production tests without running
+[33m11aa3ab[m ci: serialize defense-ci docs/tests builds and lock deps
+[33mfcd6011[m ci: move gates to rust 1.93.1 and align cargo-deny
+[33m6ee62c5[m ci: pin cargo-deny to rustc-1.85 compatible version
+[33mec4d241[m ci: harden runners against intermittent reqwest E0463 (pinned toolchain, clean state, single-job builds)
+[33mfb3d7bd[m ci: make cargo builds deterministic to avoid reqwest E0463 in runners
+[33m06c7472[m ci: stabilize rust env flags and cargo reproducibility vars
+[33mcbe23f7[m Merge branch 'main' into fix/security-audit-remediation
+[33mf930f8e[m security: add compact chain proof, production gate, and hardening roadmap bundle
+[33mdc45ac6[m security: hard-audit remediations for hybrid auth, temporal RBAC, and persistence
+[33m943a246[m chore: bump workspace and internal deps to 0.9.8
+[33m84a9183[m Fix/security audit remediation (#12)
+[33m14fa27b[m Merge branch 'main' into fix/security-audit-remediation
+[33mebf5baf[m security: implement audit remediations for auth, canonicalization, and hardening
+[33m5d29fd4[m Fix/security audit remediation (#11)
+[33m55f1418[m chore(release): bump workspace and internal crate versions to 0.9.7
+[33m82a5be6[m Fix/security audit remediation (#10)
+[33md3a9c69[m feat: add production-hardening crypto profile and governance docs
+[33mc255841[m Fix/security audit remediation (#9)
+[33m371d2b0[m Merge branch 'main' into fix/security-audit-remediation
+[33mf44946c[m ci(real-crypto): pin runner to ubuntu-22.04 for llvm14/libclang
+[33m6c87e18[m Fix/security audit remediation (#8)
+[33m5062434[m fix(pqcrypto): restore real-crypto KEM parameter names in oqs provider
+[33m54659f4[m ci(real-crypto): pin llvm14 toolchain and add bindgen debug
+[33m21c26b6[m Merge branch 'main' into fix/security-audit-remediation
+[33m819e3ea[m ci(real-crypto): require libclang-dev and export LIBCLANG_PATH
+[33m23c9f2f[m Fix/security audit remediation (#7)
+[33m97c37e6[m docs(audit): update pre-audit status for Windows real-crypto bindgen blocker
+[33m0572a07[m ci(real-crypto): ensure bindgen can locate libclang.so
+[33m0d4f800[m ci(real-crypto): harden dependency setup on ubuntu runner
+[33m77db385[m ci(real-crypto): fix libclang discovery under pipefail
+[33m1d33f71[m ci(security): fix real-crypto/sbom checks and add dependency risk assessment
+[33mb58d6df[m Fix/security audit remediation (#6)
+[33mffb0e81[m Merge branch 'main' into fix/security-audit-remediation
+[33m7660748[m Fix/security audit remediation (#5)
+[33m828934e[m ci: fix failing real-crypto and sbom PR checks
+[33m8c1c111[m Merge branch 'main' into fix/security-audit-remediation
+[33m8f9f432[m ci(security): add real-crypto gate, signed SBOM workflow, and formal STRIDE model
+[33mb37b603[m fix(security): close pre-audit blockers and pass strict checks
+[33me23f431[m audit: run pre-external checks and harden build/audit baselines
+[33m4a8245f[m Fix/security audit remediation (#4)
+[33m9fe5422[m ci: stabilize reproducible/signing/formal verification workflows
+[33mfd084b6[m chore: commit remaining workspace changes
+[33mcfb770d[m Fix/security audit remediation (#3)
+[33mc3d008e[m Merge branch 'main' into fix/security-audit-remediation
+[33m3401b98[m fix(security): close counter-audit gaps for jwt, tls, rate-limit, audit ip, softhsm, infra
+[33m733a8c8[m chore(release): bump workspace and internal deps to 0.9.6
+[33mac2e298[m fix(security): apply audit remediations for api auth, tls, crypto, an… (#2)
+[33m1eef7ef[m ci(repro): narrow PR build matrix to core crates to avoid reqwest runner breakage
+[33m70ac4e3[m ci: stabilize PR checks and fix workflow regressions
+[33m0242ca1[m fix(security): apply audit remediations for api auth, tls, crypto, and deterministic proofing
+[33maf9d730[m[33m ([m[1;33mtag: [m[1;33mv0.9.4[m[33m, [m[1;31morigin/master[m[33m, [m[1;31morigin/HEAD[m[33m, [m[1;32mmaster[m[33m)[m docs(repo): add LICENSE, SECURITY policy, and public README
+[33mc48b5db[m feat(security): harden hybrid KEM, proof schema, and ledger fail-closed for 0.9.4
+[33mc46ddc7[m Update SECURITY.md
+[33md8e2a01[m Update SECURITY.md
+[33med6c2d9[m chore(release): sync 0.9.3 and add security validation report
+[33md327cd8[m fix(security): remediate SEC-A01 SEC-A02 SEC-A03
+[33m8be8ef3[m chore(release): bump workspace and internal deps to 0.9.2
+[33mc18f3be[m feat(api-service): align audit logging with immutable ledger builder
+[33mecdd495[m docs(interop): add cross-language proof envelope v1 vector checkers
+[33mbe00799[m chore(repo): move legacy top-level docs under docs and ignore local artifacts
+[33mf78fbbe[m feat(rsrp): harden proof runtime and publish proof envelope v1
+[33m94f7464[m[33m ([m[1;33mtag: [m[1;33mv0.9.1[m[33m)[m release: v0.9.1
+[33m7311df5[m Initial commit: R-SRP project - Zero Trust Security Response Platform

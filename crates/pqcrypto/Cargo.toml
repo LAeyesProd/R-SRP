@@ -1,0 +1,79 @@
+# RSRP Post-Quantum Cryptography
+#
+# Hybrid mode: Classical + Post-Quantum
+# Implements NIST PQC Standards (2024)
+
+[package]
+name = "rsrp-pqcrypto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Hybrid post-quantum cryptographic primitives for deterministic proof systems"
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "README.md"
+documentation = "https://docs.rs/rsrp-pqcrypto"
+
+[lib]
+name = "pqcrypto"
+
+[package.metadata.aliases]
+# Future: rsrp-pqcrypto = "pqcrypto"
+
+[features]
+default = []
+mock-crypto = []
+real-crypto = ["dep:oqs"]
+# Production hardening profile:
+# - real backend only
+# - frozen defaults: ML-KEM-768 / ML-DSA-65
+production = ["real-crypto", "kyber768", "dilithium3"]
+use-pure-rust = []
+
+# Enable Dilithium (signature)
+dilithium2 = []
+dilithium3 = []
+dilithium5 = []
+
+# Enable Kyber (KEM)
+kyber512 = []
+kyber768 = []
+kyber1024 = []
+
+# Falcon (signature) - large keys
+falcon512 = []
+falcon1024 = []
+
+[dependencies]
+# Classical crypto
+ed25519-dalek = { version = "2.1", features = ["rand_core", "serde"] }
+sha2 = "0.10"
+hkdf = "0.12"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+signature = "2.2"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Async
+tokio = { version = "1.35", features = ["rt"] }
+
+# Zeroize for secure memory
+zeroize = { version = "1.7", features = ["derive"] }
+
+# Randomness
+rand = "0.8"
+
+# Base64 encoding
+base64 = "0.22"
+oqs = { version = "0.11", optional = true, default-features = false, features = ["std", "ml_dsa", "ml_kem"] }
+tracing = "0.1"
+

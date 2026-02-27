@@ -1,0 +1,353 @@
+# Cilium Network Policies for R-SRP Ultra
+# eBPF-based Zero-Trust Networking
+
+---
+# Default Deny All Ingress
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: rsrp-prod
+spec:
+  description: "Default deny all ingress traffic"
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/managed-by: rsrp
+  ingressDeny:
+    - {}  # Deny all ingress
+---
+# CRUE Engine Policy
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: crue-engine-policy
+  namespace: rsrp-prod
+spec:
+  description: "CRUE rule engine - identity-based access"
+  endpointSelector:
+    matchLabels:
+      app: crue-engine
+  ingress:
+    # Allow from API Gateway
+    - fromEndpoints:
+        - matchLabels:
+            app: api-gateway
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+          rules:
+            http:
+              - method: GET
+                path: "/evaluate.*"
+              - method: POST
+                path: "/evaluate.*"
+    # Allow from identity-proxy
+    - fromEndpoints:
+        - matchLabels:
+            app: identity-proxy
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+    # Metrics endpoint (restricted)
+    - fromEndpoints:
+        - matchLabels:
+            app: prometheus
+      toPorts:
+        - ports:
+            - port: "9090"
+              protocol: TCP
+  egress:
+    # Allow DNS
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+    # Allow to immutable-logging
+    - toEndpoints:
+        - matchLabels:
+            app: immutable-logging
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+---
+# API Gateway Policy
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: api-gateway-policy
+  namespace: rsrp-prod
+spec:
+  description: "API Gateway - external access"
+  endpointSelector:
+    matchLabels:
+      app: api-gateway
+  ingress:
+    # Allow from ingress controller
+    - fromEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: ingress-nginx
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+    # Health checks
+    - fromEndpoints:
+        - matchLabels:
+            app: kubelet
+      toPorts:
+        - ports:
+            - port: "8081"
+              protocol: TCP
+  egress:
+    # Allow to CRUE engine
+    - toEndpoints:
+        - matchLabels:
+            app: crue-engine
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+    # Allow to identity-proxy
+    - toEndpoints:
+        - matchLabels:
+            app: identity-proxy
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+    # Allow to anomaly-detector
+    - toEndpoints:
+        - matchLabels:
+            app: anomaly-detector
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+    # Allow to immutable-logging
+    - toEndpoints:
+        - matchLabels:
+            app: immutable-logging
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+---
+# Immutable Logging Policy
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: immutable-logging-policy
+  namespace: rsrp-prod
+spec:
+  description: "Immutable logging - append only"
+  endpointSelector:
+    matchLabels:
+      app: immutable-logging
+  ingress:
+    # Allow from all R-SRP services
+    - fromEndpoints:
+        - matchLabels:
+            app.kubernetes.io/managed-by: rsrp
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+  egress:
+    # Allow to external audit storage (WORM)
+    - toFQDNs:
+        - matchPattern: "*.rsrp-audit.*"
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+    # Allow DNS
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+---
+# Identity Proxy Policy
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: identity-proxy-policy
+  namespace: rsrp-prod
+spec:
+  description: "Identity proxy - JWT validation"
+  endpointSelector:
+    matchLabels:
+      app: identity-proxy
+  ingress:
+    # Allow from API Gateway
+    - fromEndpoints:
+        - matchLabels:
+            app: api-gateway
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+  egress:
+    # Allow to external identity provider
+    - toFQDNs:
+        - matchPattern: "auth.rsrp.*"
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+    # Allow to crypto-core for key validation
+    - toEndpoints:
+        - matchLabels:
+            app: crypto-core
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+---
+# Anomaly Detector Policy
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: anomaly-detector-policy
+  namespace: rsrp-prod
+spec:
+  description: "Anomaly detection - ML monitoring"
+  endpointSelector:
+    matchLabels:
+      app: anomaly-detector
+  ingress:
+    # Allow from API Gateway
+    - fromEndpoints:
+        - matchLabels:
+            app: api-gateway
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+  egress:
+    # Allow to metrics storage
+    - toEndpoints:
+        - matchLabels:
+            app: prometheus
+      toPorts:
+        - ports:
+            - port: "9090"
+              protocol: TCP
+    # Allow to immutable-logging for alerts
+    - toEndpoints:
+        - matchLabels:
+            app: immutable-logging
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+---
+# Crypto Core Policy
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: crypto-core-policy
+  namespace: rsrp-prod
+spec:
+  description: "Crypto core - cryptographic operations"
+  endpointSelector:
+    matchLabels:
+      app: crypto-core
+  ingress:
+    # Allow from identity-proxy
+    - fromEndpoints:
+        - matchLabels:
+            app: identity-proxy
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+    # Allow from anomaly-detector
+    - fromEndpoints:
+        - matchLabels:
+            app: anomaly-detector
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+  egress:
+    # Allow to HSM (if external)
+    - toFQDNs:
+        - matchPattern: "hsm.rsrp.*"
+      toPorts:
+        - ports:
+            - port: "8443"
+              protocol: TCP
+    # Allow to Vault for secrets
+    - toFQDNs:
+        - matchPattern: "vault.rsrp.*"
+      toPorts:
+        - ports:
+            - port: "8200"
+              protocol: TCP
+---
+# Global DNS Policy
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: rsrp-prod
+spec:
+  description: "Allow DNS queries"
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/managed-by: rsrp
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+---
+# Service Mesh Policy (if using Istio)
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: service-mesh-mtls
+  namespace: rsrp-prod
+spec:
+  description: "mTLS enforcement"
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/managed-by: rsrp
+  ingressDeny:
+    # Deny traffic without mTLS
+    - fromEndpoints:
+        - matchLabels:
+            security.istio.io/tlsMode: "istio"
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+            - port: "8443"
+              protocol: TCP
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            app.kubernetes.io/managed-by: rsrp
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+            - port: "8443"
+              protocol: TCP
