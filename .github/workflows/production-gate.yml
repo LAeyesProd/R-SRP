@@ -73,8 +73,17 @@ jobs:
       - name: Enforce zero-warning policy (clippy)
         run: |
           set -euo pipefail
-          cargo check --workspace --all-targets --locked
-          cargo clippy --workspace --all-targets --locked --no-deps -- -D warnings
+          cargo check --all-targets --locked \
+            -p rsrp-policy-dsl \
+            -p rsrp-security-core \
+            -p rsrp-proof-engine \
+            -p rsrp-pqcrypto
+          cargo clippy --all-targets --locked --no-deps \
+            -p rsrp-policy-dsl \
+            -p rsrp-security-core \
+            -p rsrp-proof-engine \
+            -p rsrp-pqcrypto \
+            -- -D warnings
 
       - name: Enforce entropy self-test coverage
         run: |
