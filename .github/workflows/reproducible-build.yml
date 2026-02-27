@@ -37,6 +37,13 @@ jobs:
           command -v cmake >/dev/null 2>&1 || NEED_INSTALL=1
           command -v clang >/dev/null 2>&1 || NEED_INSTALL=1
           command -v llvm-config >/dev/null 2>&1 || NEED_INSTALL=1
+          HAS_LIBCLANG=0
+          if command -v ldconfig >/dev/null 2>&1 && ldconfig -p | grep -q 'libclang'; then
+            HAS_LIBCLANG=1
+          fi
+          if [ "${HAS_LIBCLANG}" -eq 0 ]; then
+            NEED_INSTALL=1
+          fi
 
           if [ "${NEED_INSTALL}" -eq 1 ]; then
             sudo apt-get update
@@ -50,35 +57,37 @@ jobs:
               libclang-dev
           fi
 
-          LIBCLANG_PATH=""
-          if command -v llvm-config >/dev/null 2>&1; then
-            LLVM_LIBDIR="$(llvm-config --libdir || true)"
-            if [ -n "${LLVM_LIBDIR}" ] && [ -d "${LLVM_LIBDIR}" ]; then
-              LIBCLANG_PATH="${LLVM_LIBDIR}"
+          LIBCLANG_FILE=""
+          for CANDIDATE in \
+            /usr/lib/llvm-*/lib/libclang.so \
+            /usr/lib/llvm-*/lib/libclang-*.so* \
+            /usr/lib/*/libclang.so* \
+            /usr/lib/libclang.so* \
+            /lib/*/libclang.so* \
+            /lib/libclang.so*; do
+            if [ -e "${CANDIDATE}" ]; then
+              LIBCLANG_FILE="${CANDIDATE}"
+              break
             fi
+          done
+
+          if [ -z "${LIBCLANG_FILE}" ] && command -v ldconfig >/dev/null 2>&1; then
+            LIBCLANG_FILE="$(ldconfig -p | awk '/libclang/{print $NF; exit}' || true)"
           fi
 
-          if [ -z "${LIBCLANG_PATH}" ]; then
-            for CANDIDATE in /usr/lib/llvm-*/lib/libclang.so*; do
-              if [ -e "${CANDIDATE}" ]; then
-                LIBCLANG_PATH="$(dirname "${CANDIDATE}")"
-                break
-              fi
-            done
-          fi
-
-          if [ -z "${LIBCLANG_PATH}" ] && command -v ldconfig >/dev/null 2>&1; then
-            LIBCLANG_SO="$(ldconfig -p | awk '/libclang\.so/{print $NF; exit}' || true)"
-            if [ -n "${LIBCLANG_SO}" ]; then
-              LIBCLANG_PATH="$(dirname "${LIBCLANG_SO}")"
-            fi
-          fi
-
-          if [ -z "${LIBCLANG_PATH}" ]; then
+          if [ -z "${LIBCLANG_FILE}" ]; then
             echo "libclang shared library path not found" >&2
             exit 1
           fi
 
+          LIBCLANG_PATH="$(dirname "${LIBCLANG_FILE}")"
+          if [ ! -f "${LIBCLANG_PATH}/libclang.so" ]; then
+            mkdir -p /tmp/libclang-shim
+            ln -sf "${LIBCLANG_FILE}" /tmp/libclang-shim/libclang.so
+            LIBCLANG_PATH="/tmp/libclang-shim"
+          fi
+
+          echo "Resolved LIBCLANG_FILE=${LIBCLANG_FILE}"
           echo "Resolved LIBCLANG_PATH=${LIBCLANG_PATH}"
           echo "LIBCLANG_PATH=${LIBCLANG_PATH}" >> "${GITHUB_ENV}"
 
