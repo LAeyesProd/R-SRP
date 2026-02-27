@@ -267,16 +267,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Security controls
     let tls_enabled = parse_bool_env("TLS_ENABLED", false);
-    let allow_insecure_http = parse_bool_env("ALLOW_INSECURE_HTTP", false);
-    if !tls_enabled && !allow_insecure_http {
+    if !tls_enabled && !cfg!(debug_assertions) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "TLS_ENABLED must be true unless ALLOW_INSECURE_HTTP=true",
+            "TLS_ENABLED must be true for release builds",
         )
         .into());
-    }
-    if !tls_enabled {
-        tracing::warn!("TLS disabled via ALLOW_INSECURE_HTTP=true (development mode).");
     }
     let jwt_secret = std::env::var("JWT_SECRET").map_err(|_| {
         std::io::Error::new(std::io::ErrorKind::InvalidInput, "JWT_SECRET is required")

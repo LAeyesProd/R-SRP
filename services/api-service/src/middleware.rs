@@ -15,7 +15,6 @@ use serde_json::json;
 use std::{
     collections::HashMap,
     net::SocketAddr,
-    sync::atomic::{AtomicU64, Ordering},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -25,8 +24,6 @@ use tokio::sync::Mutex;
 pub struct IpRateLimiterConfig {
     pub limit_per_window: u32,
     pub window: Duration,
-    pub max_buckets: usize,
-    pub cleanup_interval_requests: u64,
 }
 
 impl Default for IpRateLimiterConfig {
@@ -34,8 +31,6 @@ impl Default for IpRateLimiterConfig {
         Self {
             limit_per_window: 100,
             window: Duration::from_secs(60),
-            max_buckets: 10_000,
-            cleanup_interval_requests: 128,
         }
     }
 }
@@ -51,7 +46,6 @@ struct WindowBucket {
 pub struct IpRateLimiter {
     config: IpRateLimiterConfig,
     buckets: Mutex<HashMap<String, WindowBucket>>,
-    request_counter: AtomicU64,
 }
 
 impl IpRateLimiter {
@@ -59,19 +53,12 @@ impl IpRateLimiter {
         Arc::new(Self {
             config,
             buckets: Mutex::new(HashMap::new()),
-            request_counter: AtomicU64::new(0),
         })
     }
 
     async fn check_and_count(&self, key: &str) -> Result<(), u64> {
         let now = Instant::now();
         let mut buckets = self.buckets.lock().await;
-        let request_count = self.request_counter.fetch_add(1, Ordering::Relaxed) + 1;
-        let cleanup_interval = self.config.cleanup_interval_requests.max(1);
-        if request_count % cleanup_interval == 0 || buckets.len() > self.config.max_buckets {
-            self.cleanup_and_bound(&mut buckets, now);
-        }
-
         let bucket = buckets
             .entry(key.to_string())
             .or_insert_with(|| WindowBucket {
@@ -91,35 +78,7 @@ impl IpRateLimiter {
         }
 
         bucket.hits += 1;
-        if buckets.len() > self.config.max_buckets {
-            self.cleanup_and_bound(&mut buckets, now);
-        }
         Ok(())
-    }
-
-    fn cleanup_and_bound(&self, buckets: &mut HashMap<String, WindowBucket>, now: Instant) {
-        // Drop stale windows first to keep unbounded maps from growing forever.
-        let max_age = self
-            .config
-            .window
-            .checked_mul(2)
-            .unwrap_or(self.config.window);
-        buckets.retain(|_, bucket| now.duration_since(bucket.window_started_at) < max_age);
-
-        if buckets.len() <= self.config.max_buckets {
-            return;
-        }
-
-        // If we still exceed bounds, evict oldest buckets deterministically.
-        let overflow = buckets.len() - self.config.max_buckets;
-        let mut candidates: Vec<(String, Instant)> = buckets
-            .iter()
-            .map(|(k, v)| (k.clone(), v.window_started_at))
-            .collect();
-        candidates.sort_by_key(|(_, started)| *started);
-        for (key, _) in candidates.into_iter().take(overflow) {
-            buckets.remove(&key);
-        }
     }
 }
 
@@ -203,27 +162,4 @@ pub async fn request_id_middleware(mut request: Request, next: Next) -> Response
             .insert(HeaderName::from_static("x-request-id"), value);
     }
     response
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn rate_limiter_bounds_bucket_growth() {
-        let limiter = IpRateLimiter::new(IpRateLimiterConfig {
-            limit_per_window: 100,
-            window: Duration::from_secs(60),
-            max_buckets: 2,
-            cleanup_interval_requests: 1,
-        });
-
-        for i in 0..10 {
-            let key = format!("ip:10.0.0.{i}");
-            limiter.check_and_count(&key).await.expect("limit");
-        }
-
-        let size = limiter.buckets.lock().await.len();
-        assert!(size <= 2, "bucket map should be bounded, got {size}");
-    }
 }
