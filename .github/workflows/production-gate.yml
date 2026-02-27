@@ -26,6 +26,8 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.93.1
+        with:
+          components: clippy
 
       - name: Install OQS toolchain (bindgen/cmake)
         run: |
