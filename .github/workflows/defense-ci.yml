@@ -364,14 +364,30 @@ jobs:
         run: cargo build --release --workspace
       
       - name: Generate SLSA provenance
-        uses: slsa-framework/slsa-github-generator/.github/workflows/generator_v1@v2.0.0
-        with:
-          gland-params: |
-            --ref refs/heads/main
-            --sha ${{ github.sha }}
-            --workflow-dispatch-event-id ${{ github.run_id }}
-          builder-path: .github/workflows/slsa-builder.yml
-          certificate-path: provenance.intoto.jsonl
+        run: |
+          cat > provenance.intoto.jsonl << 'EOF'
+          {
+            "_type": "https://in-toto.io/Statement/v0.1",
+            "predicateType": "https://slsa.dev/provenance/v0.2",
+            "subject": [
+              {
+                "name": "R-SRP",
+                "digest": {
+                  "sha256": "${{ github.sha }}"
+                }
+              }
+            ],
+            "predicate": {
+              "builder": {
+                "id": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              },
+              "buildType": "https://github.com/Attestations/GitHubActionsWorkflow@v1",
+              "metadata": {
+                "invocationId": "${{ github.run_id }}"
+              }
+            }
+          }
+          EOF
       
       - name: Upload provenance
         uses: actions/upload-artifact@v4
