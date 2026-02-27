@@ -33,8 +33,8 @@ rustflags = [
 # Reproducible builds configuration
 # Ensures bit-identical builds across environments
 [env]
-SOURCE_DATE_EPOCH = { value = "{{ SOURCE_DATE_EPOCH }}", force = true }
-CARGO_NET_GIT_FETCH_WITH_CLI = { value = "false", force = true }
+# SOURCE_DATE_EPOCH must be provided by CI/release jobs and remain overridable.
+CARGO_NET_GIT_FETCH_WITH_CLI = { value = "true", force = false }
 
 # Default target for all Rust targets
 [term]
