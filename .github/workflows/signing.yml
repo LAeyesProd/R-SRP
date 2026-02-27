@@ -87,7 +87,10 @@ jobs:
           IMAGE_REF: "${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build_image.outputs.digest }}"
         run: |
           # Verify the signature
-          cosign verify $IMAGE_REF
+          cosign verify \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --certificate-identity-regexp "^https://github.com/LAeyesProd/R-SRP/.github/workflows/signing.yml@refs/(heads/main|heads/develop|tags/v.*)$" \
+            $IMAGE_REF
       
       - name: Generate SBOM for container
         if: github.event_name != 'pull_request'
