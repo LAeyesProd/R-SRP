@@ -1,6 +1,6 @@
 # R-SRP Assumptions Register
 
-Version: 0.9.8  
+Version: 0.9.9  
 Date: 2026-02-27  
 Owner: Security Engineering
 
@@ -23,6 +23,7 @@ Each assumption includes:
 | A-004 | Append-only audit storage and WAL persistence are deployed as designed. | Loss of audit continuity / replay tamper risk. | immutable-log WAL config, chain verification outputs, backup/restore runbook |
 | A-005 | External TSA/HSM trust anchors are managed by deployment security policy. | Timestamp/signature trust can be undermined externally. | trust-store governance records, rotation evidence, incident runbook |
 | A-006 | API is deployed behind expected network controls (mTLS/ingress policy/WAF as required). | Exposure to abuse/fingerprinting and DoS increases. | deployment manifests, network policy config, monitoring evidence |
+| A-007 | Production hosts keep a trusted, monitored UTC time source (NTP/PTP) and alert on drift. | Time-based RBAC and audit timestamps can be manipulated by clock drift or tampering. | time-sync policy, drift alerts, host monitoring evidence |
 
 ## 3. Hostile-Host Model (Container/VM Compromise)
 
@@ -41,4 +42,3 @@ Any new production feature that introduces a trust dependency must:
 1. add/modify an assumption entry here,
 2. add traceability row in `docs/TRACEABILITY_MATRIX.md`,
 3. update `docs/SECURITY_TARGET.md` and (if needed) `docs/THREAT_MODEL_STRIDE.md`.
-

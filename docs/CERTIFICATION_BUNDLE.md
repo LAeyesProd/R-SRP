@@ -60,7 +60,7 @@ cargo test -p rsrp-proof-engine --locked
 cargo test -p api-service --locked
 ```
 
-## 3. Required Technical Evidence
+## 4.3 Required Technical Evidence
 
 Code and tests:
 - Hybrid signature verification tests

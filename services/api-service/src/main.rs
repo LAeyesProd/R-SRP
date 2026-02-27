@@ -152,6 +152,9 @@ struct AppState {
     engine: CrueEngine,
     logging: immutable_logging::ImmutableLog,
     mission_schedule: mission_schedule::MissionScheduleStore,
+    entropy_health: Mutex<EntropyHealthState>,
+    entropy_health_enabled: bool,
+    entropy_fail_closed: bool,
     publication_service: Mutex<immutable_logging::publication::PublicationService>,
     metrics: ApiMetrics,
     audit_publications_dir: Option<PathBuf>,
@@ -159,6 +162,13 @@ struct AppState {
     audit_tsa_url: Option<String>,
     audit_tsa_trust_store_pem: Option<PathBuf>,
     trusted_proxies: middleware::TrustedProxyConfig,
+}
+
+#[derive(Debug, Clone, Default)]
+struct EntropyHealthState {
+    healthy: bool,
+    last_checked_at: Option<String>,
+    last_error: Option<String>,
 }
 
 #[derive(Default)]
@@ -301,6 +311,24 @@ fn cors_layer_from_env() -> Result<CorsLayer, Box<dyn std::error::Error>> {
         ]))
 }
 
+async fn refresh_entropy_health(state: &Arc<AppState>) {
+    let checked_at = chrono::Utc::now().to_rfc3339();
+    let mut health = state.entropy_health.lock().await;
+    match crypto_core::entropy::entropy_health_check() {
+        Ok(_) => {
+            health.healthy = true;
+            health.last_checked_at = Some(checked_at);
+            health.last_error = None;
+        }
+        Err(err) => {
+            health.healthy = false;
+            health.last_checked_at = Some(checked_at);
+            health.last_error = Some(err.to_string());
+            tracing::error!(error = %err, "Entropy health check failed");
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging
@@ -380,6 +408,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .into());
     }
     let auth_config = auth::JwtAuthConfig::from_env()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+
+    let mission_schedule = mission_schedule::MissionScheduleStore::from_env()
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
 
     // Initialize CRUE engine
@@ -575,6 +606,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         engine,
         logging,
         mission_schedule,
+        entropy_health: Mutex::new(initial_entropy_health),
+        entropy_health_enabled,
+        entropy_fail_closed,
         publication_service: Mutex::new(immutable_logging::publication::PublicationService::new()),
         metrics: ApiMetrics::default(),
         audit_publications_dir,

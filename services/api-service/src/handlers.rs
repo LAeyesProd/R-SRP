@@ -24,11 +24,7 @@ use immutable_logging::publication::{DailyPublication, TsaCmsVerifyError};
 
 /// Health check endpoint
 pub async fn health_check() -> Json<HealthResponse> {
-    let expose_version = cfg!(debug_assertions)
-        || std::env::var("HEALTH_EXPOSE_VERSION")
-            .ok()
-            .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
-            .unwrap_or(false);
+    let expose_version = should_expose_health_version(cfg!(debug_assertions));
 
     Json(HealthResponse {
         status: "healthy".to_string(),
@@ -39,6 +35,14 @@ pub async fn health_check() -> Json<HealthResponse> {
         },
         timestamp: chrono::Utc::now().to_rfc3339(),
     })
+}
+
+fn should_expose_health_version(debug_build: bool) -> bool {
+    debug_build
+        || std::env::var("HEALTH_EXPOSE_VERSION")
+            .ok()
+            .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(false)
 }
 
 /// Readiness check endpoint - confirms service can handle requests
@@ -1008,6 +1012,41 @@ mod tests {
     use super::*;
     use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
     use immutable_logging::publication::{PublicationService, TsaTimestamp};
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("env lock")
+    }
+
+    #[test]
+    fn test_health_check_redacts_version_by_default_in_production_mode() {
+        let _guard = env_test_lock();
+        let previous = std::env::var("HEALTH_EXPOSE_VERSION").ok();
+        std::env::remove_var("HEALTH_EXPOSE_VERSION");
+
+        assert!(!should_expose_health_version(false));
+
+        if let Some(value) = previous {
+            std::env::set_var("HEALTH_EXPOSE_VERSION", value);
+        }
+    }
+
+    #[test]
+    fn test_health_check_can_expose_version_with_explicit_opt_in() {
+        let _guard = env_test_lock();
+        let previous = std::env::var("HEALTH_EXPOSE_VERSION").ok();
+        std::env::set_var("HEALTH_EXPOSE_VERSION", "true");
+
+        assert!(should_expose_health_version(false));
+
+        match previous {
+            Some(value) => std::env::set_var("HEALTH_EXPOSE_VERSION", value),
+            None => std::env::remove_var("HEALTH_EXPOSE_VERSION"),
+        }
+    }
 
     #[test]
     fn test_load_daily_publication_from_dir() {

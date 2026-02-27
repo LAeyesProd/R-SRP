@@ -1,5 +1,17 @@
 # R-SRP Ultra+ Compliance & Infrastructure Guide
 
+## Current TOE Status (v0.9.9)
+
+This document includes target-state architecture guidance. For certification claims, rely on implemented controls only:
+- mTLS is implemented with standard X.509 validation.
+- SPIFFE/SVID URI-SAN validation is not implemented in the current TOE.
+- Hardware HSM backends are not implemented in the current open-source TOE build.
+- SoftHSM is test/non-production only.
+
+Authoritative implementation status references:
+- `docs/SECURITY_TARGET.md`
+- `docs/HSM_IMPLEMENTATION_STATUS.md`
+
 ## 🌍 Transatlantic Architecture
 
 ### Cloud Provider Support

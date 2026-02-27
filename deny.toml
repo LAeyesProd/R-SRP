@@ -22,6 +22,7 @@ allow = [
     "Unlicense",
     "Unicode-3.0",
     "OpenSSL",
+    "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.8
 exceptions = []

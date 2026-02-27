@@ -182,6 +182,7 @@ impl Kyber {
 }
 
 #[cfg(feature = "mock-crypto")]
+#[allow(dead_code)]
 fn warn_if_mock_backend() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
