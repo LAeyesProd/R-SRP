@@ -6,7 +6,7 @@ use axum::{
     response::Json,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
-use chrono::Timelike;
+use chrono::{NaiveDate, Timelike, Utc};
 use std::net::SocketAddr;
 use std::path::Path as FsPath;
 use std::sync::Arc;
@@ -69,6 +69,16 @@ pub async fn validate_access(
 ) -> Result<Json<ValidationResponse>, ApiError> {
     validate_get_request(&params)?;
     tracing::debug!("Validating access for agent: {}", params.agent_id);
+    let now = Utc::now();
+    let is_within_mission_hours = state
+        .mission_schedule
+        .is_within_mission_hours(params.mission_id.as_deref(), now);
+    if !is_within_mission_hours {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "request outside authorized mission schedule",
+        ));
+    }
     let ip_address = middleware::resolve_client_ip(
         &headers,
         connect_info.as_ref().map(|ci| ci.0.ip()),
@@ -101,8 +111,8 @@ pub async fn validate_access(
         results_last_query: params.results_last_query.unwrap_or(0),
         account_department: params.account_department,
         allowed_departments: params.allowed_departments.unwrap_or_default(),
-        request_hour: chrono::Utc::now().hour(),
-        is_within_mission_hours: true,
+        request_hour: now.hour(),
+        is_within_mission_hours,
     };
 
     let result = state.engine.evaluate(&request);
@@ -138,6 +148,16 @@ pub async fn validate_access_post(
 ) -> Result<Json<ValidationResponse>, ApiError> {
     validate_post_request(&payload)?;
     tracing::debug!("Validating access for agent: {}", payload.agent_id);
+    let now = Utc::now();
+    let is_within_mission_hours = state
+        .mission_schedule
+        .is_within_mission_hours(payload.mission_id.as_deref(), now);
+    if !is_within_mission_hours {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "request outside authorized mission schedule",
+        ));
+    }
     let ip_address = middleware::resolve_client_ip(
         &headers,
         connect_info.as_ref().map(|ci| ci.0.ip()),
@@ -172,8 +192,8 @@ pub async fn validate_access_post(
         results_last_query: payload.results_last_query.unwrap_or(0),
         account_department: payload.account_department,
         allowed_departments: payload.allowed_departments.unwrap_or_default(),
-        request_hour: chrono::Utc::now().hour(),
-        is_within_mission_hours: true,
+        request_hour: now.hour(),
+        is_within_mission_hours,
     };
 
     let result = state.engine.evaluate(&request);
@@ -221,6 +241,7 @@ pub async fn get_daily_root(
     State(state): State<Arc<AppState>>,
     Path(date): Path<String>,
 ) -> Result<Json<DailyRootResponse>, ApiError> {
+    validate_publication_date(&date)?;
     let dir = state.audit_publications_dir.as_ref().ok_or_else(|| {
         ApiError::new(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -254,6 +275,7 @@ pub async fn verify_daily_publication(
     State(state): State<Arc<AppState>>,
     Path(date): Path<String>,
 ) -> Result<Json<DailyPublicationVerifyResponse>, ApiError> {
+    validate_publication_date(&date)?;
     let dir = state.audit_publications_dir.as_ref().ok_or_else(|| {
         ApiError::new(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -837,9 +859,9 @@ fn normalize_legal_basis(value: &str) -> Result<String, ApiError> {
 
 fn derive_legal_basis(
     provided: Option<&str>,
-    query_type: Option<&str>,
-    mission_type: Option<&str>,
-    agent_org: Option<&str>,
+    _query_type: Option<&str>,
+    _mission_type: Option<&str>,
+    _agent_org: Option<&str>,
 ) -> Result<String, ApiError> {
     if let Some(basis) = provided {
         if !basis.trim().is_empty() {
@@ -847,25 +869,28 @@ fn derive_legal_basis(
         }
     }
 
-    let query_type = query_type.unwrap_or_default().to_ascii_uppercase();
-    if query_type.contains("EXPORT") {
-        return Ok("LEGAL_OBLIGATION".to_string());
-    }
+    Err(ApiError::new(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "legal_basis is required and must be explicitly provided by caller",
+    ))
+}
 
-    let mission_type = mission_type.unwrap_or_default().to_ascii_uppercase();
-    if mission_type.contains("PUBLIC")
-        || mission_type.contains("GOV")
-        || mission_type.contains("FISCAL")
-    {
-        return Ok("PUBLIC_TASK".to_string());
+fn validate_publication_date(date: &str) -> Result<(), ApiError> {
+    if date.len() != 10 {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "date must use YYYY-MM-DD format",
+        ));
     }
-
-    let agent_org = agent_org.unwrap_or_default().to_ascii_uppercase();
-    if agent_org.contains("DGFIP") || agent_org.contains("MINIST") || agent_org.contains("STATE") {
-        return Ok("PUBLIC_TASK".to_string());
+    let parsed = NaiveDate::parse_from_str(date, "%Y-%m-%d")
+        .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "date must use YYYY-MM-DD format"))?;
+    if parsed.format("%Y-%m-%d").to_string() != date {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "date must use canonical YYYY-MM-DD format",
+        ));
     }
-
-    Ok("LEGITIMATE_INTEREST".to_string())
+    Ok(())
 }
 
 async fn record_validation_decision_audit(
@@ -1055,14 +1080,15 @@ mod tests {
 
     #[test]
     fn test_derive_legal_basis_mapping_and_validation() {
-        let derived = derive_legal_basis(None, Some("EXPORT_CSV"), Some("fiscal"), Some("DGFIP"))
-            .expect("derived");
-        assert_eq!(derived, "LEGAL_OBLIGATION");
-
         let explicit =
             derive_legal_basis(Some("public_task"), Some("QUERY"), Some("ops"), Some("org"))
                 .expect("explicit");
         assert_eq!(explicit, "PUBLIC_TASK");
+
+        let missing = derive_legal_basis(None, Some("EXPORT_CSV"), Some("fiscal"), Some("DGFIP"))
+            .expect_err("missing basis");
+        let missing_response = axum::response::IntoResponse::into_response(missing);
+        assert_eq!(missing_response.status(), StatusCode::UNPROCESSABLE_ENTITY);
 
         let err = derive_legal_basis(
             Some("UNKNOWN_BASIS"),
@@ -1247,5 +1273,12 @@ mod tests {
             tsa_cms_verify_error_status(&TsaCmsVerifyError::Verify("x".to_string())),
             "cms-signature-invalid"
         );
+    }
+
+    #[test]
+    fn test_validate_publication_date_rejects_invalid_format() {
+        let err = validate_publication_date("../etc/passwd").expect_err("invalid date");
+        let response = axum::response::IntoResponse::into_response(err);
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 }

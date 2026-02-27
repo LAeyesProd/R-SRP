@@ -5,7 +5,6 @@
 use crate::{CryptoError, KeyMetadata, Result};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
-use subtle::ConstantTimeEq;
 
 /// HSM configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,13 +45,18 @@ pub struct HsmKeyHandle {
 }
 
 /// HSM session
-pub trait HsmSession: Send {
+pub trait HsmSignerOps {
     /// Sign data with key
     fn sign(&mut self, key_handle: &HsmKeyHandle, data: &[u8]) -> Result<Vec<u8>>;
+}
 
+pub trait HsmVerifierOps {
     /// Verify signature
     fn verify(&mut self, key_handle: &HsmKeyHandle, data: &[u8], signature: &[u8]) -> Result<bool>;
+}
 
+/// HSM session
+pub trait HsmSession: Send + HsmSignerOps + HsmVerifierOps {
     /// Generate key pair
     fn generate_key_pair(&mut self, algorithm: &str, key_id: &str) -> Result<HsmKeyHandle>;
 
@@ -67,6 +71,7 @@ pub trait HsmSession: Send {
 pub struct SoftHsm {
     config: HsmConfig,
     keys: std::collections::HashMap<String, Vec<u8>>,
+    public_keys: std::collections::HashMap<String, Vec<u8>>,
 }
 
 impl SoftHsm {
@@ -74,11 +79,12 @@ impl SoftHsm {
         SoftHsm {
             config,
             keys: std::collections::HashMap::new(),
+            public_keys: std::collections::HashMap::new(),
         }
     }
 }
 
-impl HsmSession for SoftHsm {
+impl HsmSignerOps for SoftHsm {
     fn sign(&mut self, key_handle: &HsmKeyHandle, data: &[u8]) -> Result<Vec<u8>> {
         let key_data = self
             .keys
@@ -95,15 +101,32 @@ impl HsmSession for SoftHsm {
             crate::signature::Ed25519KeyPair::from_seed(seed, Some(key_handle.key_id.clone()));
         Ok(key.sign(data))
     }
+}
 
+impl HsmVerifierOps for SoftHsm {
     fn verify(&mut self, key_handle: &HsmKeyHandle, data: &[u8], signature: &[u8]) -> Result<bool> {
-        let computed = self.sign(key_handle, data)?;
-        Ok(computed.as_slice().ct_eq(signature).into())
+        let public_key = self
+            .public_keys
+            .get(&key_handle.key_id)
+            .ok_or_else(|| CryptoError::HsmError("Verification key not found".to_string()))?;
+        crate::signature::verify(
+            data,
+            signature,
+            public_key,
+            crate::SignatureAlgorithm::Ed25519,
+        )
     }
+}
 
+impl HsmSession for SoftHsm {
     fn generate_key_pair(&mut self, algorithm: &str, key_id: &str) -> Result<HsmKeyHandle> {
         let mut key_data = vec![0u8; 32];
         rand::rngs::OsRng.fill_bytes(&mut key_data);
+        let mut seed = [0u8; 32];
+        seed.copy_from_slice(&key_data);
+        let key = crate::signature::Ed25519KeyPair::from_seed(seed, Some(key_id.to_string()));
+        self.public_keys
+            .insert(key_id.to_string(), key.verifying_key());
         self.keys.insert(key_id.to_string(), key_data);
 
         Ok(HsmKeyHandle {
@@ -119,6 +142,11 @@ impl HsmSession for SoftHsm {
                 "SoftHSM import expects a 32-byte Ed25519 seed".to_string(),
             ));
         }
+        let mut seed = [0u8; 32];
+        seed.copy_from_slice(key_data);
+        let key = crate::signature::Ed25519KeyPair::from_seed(seed, Some(key_id.to_string()));
+        self.public_keys
+            .insert(key_id.to_string(), key.verifying_key());
         self.keys.insert(key_id.to_string(), key_data.to_vec());
 
         Ok(HsmKeyHandle {
@@ -130,6 +158,7 @@ impl HsmSession for SoftHsm {
 
     fn close(&mut self) {
         self.keys.clear();
+        self.public_keys.clear();
     }
 }
 
@@ -244,5 +273,22 @@ mod tests {
 
         assert!(signer.verify(data, &sig).unwrap());
         assert!(!signer.verify(b"tampered", &sig).unwrap());
+    }
+
+    #[test]
+    fn test_soft_hsm_verify_rejects_signature_from_other_key() {
+        let config = HsmConfig {
+            hsm_type: HsmType::SoftHSM,
+            connection: "local://softhsm".to_string(),
+            slot: 0,
+            key_label_prefix: "audit".to_string(),
+        };
+
+        let mut s1 = HsmSigner::new(config.clone(), "k1").unwrap();
+        let mut s2 = HsmSigner::new(config, "k2").unwrap();
+        let data = b"daily publication payload";
+        let sig = s1.sign(data).unwrap();
+
+        assert!(!s2.verify(data, &sig).unwrap());
     }
 }

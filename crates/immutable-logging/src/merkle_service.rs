@@ -282,4 +282,16 @@ mod tests {
         let proof = service.generate_proof(e2.entry_id(), &e2).unwrap();
         assert!(verify_proof(&proof));
     }
+
+    #[test]
+    fn test_leaf_and_node_hash_domain_separation() {
+        let left = vec![0xAA; 32];
+        let right = vec![0xBB; 32];
+        let mut combined = left.clone();
+        combined.extend_from_slice(&right);
+
+        let leaf_hash = MerkleService::hash_leaf(&combined);
+        let node_hash = MerkleService::hash_node(&left, &right);
+        assert_ne!(leaf_hash, node_hash);
+    }
 }

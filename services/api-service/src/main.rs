@@ -13,6 +13,7 @@ mod handlers;
 #[allow(dead_code)]
 mod incident;
 mod middleware;
+mod mission_schedule;
 mod models;
 mod tls;
 
@@ -156,6 +157,7 @@ struct AppState {
     audit_tsa_url: Option<String>,
     audit_tsa_trust_store_pem: Option<PathBuf>,
     trusted_proxies: middleware::TrustedProxyConfig,
+    mission_schedule: mission_schedule::MissionScheduleStore,
 }
 
 #[derive(Default)]
@@ -294,8 +296,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let engine = CrueEngine::new();
     tracing::info!("CRUE Engine initialized with {} rules", engine.rule_count());
 
-    // Initialize logging
-    let logging = immutable_logging::ImmutableLog::new();
+    // Initialize immutable logging (optionally from WAL replay).
+    let immutable_log_wal_path = std::env::var("IMMUTABLE_LOG_WAL_PATH")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .map(PathBuf::from);
+    let logging = if let Some(path) = immutable_log_wal_path.as_ref() {
+        tracing::info!("Immutable log WAL enabled: {}", path.display());
+        immutable_logging::ImmutableLog::with_wal_path(path)
+            .await
+            .map_err(|e| std::io::Error::other(format!("Failed to initialize WAL log: {e}")))?
+    } else {
+        immutable_logging::ImmutableLog::new()
+    };
     let audit_publications_dir = std::env::var("AUDIT_PUBLICATIONS_DIR")
         .ok()
         .filter(|v| !v.trim().is_empty())
@@ -478,10 +491,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         audit_tsa_url,
         audit_tsa_trust_store_pem,
         trusted_proxies: trusted_proxies.clone(),
+        mission_schedule: mission_schedule::MissionScheduleStore::from_env().map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("Failed to initialize mission schedule store: {e}"),
+            )
+        })?,
     });
 
-    let rate_limiter =
-        middleware::IpRateLimiter::new(middleware::IpRateLimiterConfig::default(), trusted_proxies);
+    let rate_limiter = middleware::IpRateLimiter::new(
+        middleware::IpRateLimiterConfig::from_env(),
+        trusted_proxies,
+    );
     if is_production_environment() {
         tracing::warn!(
             "Using in-memory rate limiter. Deploy a distributed backend (e.g., Redis) for multi-replica production."

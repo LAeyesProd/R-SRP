@@ -61,6 +61,29 @@ impl LogChain {
         Ok(entry)
     }
 
+    /// Append an already-committed entry (WAL replay path).
+    pub async fn append_committed(&mut self, entry: LogEntry) -> Result<(), LogError> {
+        if !entry.verify_content_hash() {
+            return Err(LogError::ChainError(
+                "WAL replay rejected entry with invalid content hash".to_string(),
+            ));
+        }
+        if entry.previous_entry_hash() != self.current_hash {
+            return Err(LogError::ChainError(format!(
+                "WAL replay previous hash mismatch: expected {}, got {}",
+                self.current_hash,
+                entry.previous_entry_hash()
+            )));
+        }
+
+        let new_hash = entry.compute_hash(&self.current_hash)?;
+        let index = self.entries.len();
+        self.entry_index.insert(entry.entry_id().to_string(), index);
+        self.entries.push(entry);
+        self.current_hash = new_hash;
+        Ok(())
+    }
+
     /// Verify chain integrity
     pub fn verify(&self) -> bool {
         let mut previous_hash = GENESIS_HASH.to_string();

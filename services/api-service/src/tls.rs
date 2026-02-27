@@ -112,24 +112,38 @@ impl TlsConfig {
 }
 
 fn parse_cert_chain(bytes: &[u8]) -> Result<Vec<CertificateDer<'static>>, TlsError> {
-    // Prefer PEM when present; fallback to a single DER certificate blob.
+    if bytes.is_empty() {
+        return Err(TlsError::CertificateParse(
+            "certificate chain file is empty".to_string(),
+        ));
+    }
+
+    // Parse as PEM when present. Do not silently fallback to DER in this case.
     if bytes.starts_with(b"-----BEGIN") {
         let certs = CertificateDer::pem_slice_iter(bytes)
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(|e| TlsError::CertificateParse(e.to_string()))?;
-        if !certs.is_empty() {
-            return Ok(certs);
+        if certs.is_empty() {
+            return Err(TlsError::CertificateParse(
+                "PEM certificate chain contains no certificates".to_string(),
+            ));
         }
+        return Ok(certs);
     }
 
     Ok(vec![CertificateDer::from(bytes.to_vec())])
 }
 
 fn parse_private_key(bytes: &[u8]) -> Result<PrivateKeyDer<'static>, TlsError> {
+    if bytes.is_empty() {
+        return Err(TlsError::CertificateParse(
+            "private key file is empty".to_string(),
+        ));
+    }
+
     if bytes.starts_with(b"-----BEGIN") {
-        if let Ok(key) = PrivateKeyDer::from_pem_slice(bytes) {
-            return Ok(key);
-        }
+        return PrivateKeyDer::from_pem_slice(bytes)
+            .map_err(|e| TlsError::CertificateParse(e.to_string()));
     }
 
     PrivateKeyDer::try_from(bytes.to_vec()).map_err(|e| TlsError::CertificateParse(e.to_string()))
@@ -145,4 +159,21 @@ fn load_root_store(bytes: &[u8]) -> Result<RootCertStore, TlsError> {
         ));
     }
     Ok(roots)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_cert_chain_rejects_empty_input() {
+        let err = parse_cert_chain(&[]).expect_err("empty cert chain must fail");
+        assert!(err.to_string().contains("empty"));
+    }
+
+    #[test]
+    fn test_parse_private_key_rejects_empty_input() {
+        let err = parse_private_key(&[]).expect_err("empty private key must fail");
+        assert!(err.to_string().contains("empty"));
+    }
 }
