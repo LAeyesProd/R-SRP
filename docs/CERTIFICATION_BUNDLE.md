@@ -29,9 +29,6 @@ The following files are required and traceability-aligned to the release baselin
 - `docs/CRYPTO_ARCHITECTURE.md`
 - `docs/ENTROPY_BOUNDARY.md`
 - `docs/KEY_LIFECYCLE_POLICY.md`
-- `docs/HSM_IMPLEMENTATION_STATUS.md`
-- `docs/NETWORK_IDENTITY_STATUS.md`
-- `docs/INCIDENT_RESPONSE_PLAN.md`
 - `docs/MERKLE_SECURITY_MODEL.md`
 - `docs/SUPPLY_CHAIN_POLICY.md`
 - `docs/RISK_REGISTER.md`
