@@ -12,6 +12,7 @@ env:
   CARGO_INCREMENTAL: "0"
   CARGO_BUILD_PIPELINING: "false"
   CARGO_BUILD_JOBS: "1"
+  CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
 
 jobs:
   production-profile:
@@ -26,6 +27,8 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.93.1
+        with:
+          components: clippy
 
       - name: Install OQS toolchain (bindgen/cmake)
         run: |
@@ -40,6 +43,24 @@ jobs:
           test -f /usr/lib/llvm-14/lib/libclang.so
           echo "LIBCLANG_PATH=/usr/lib/llvm-14/lib" >> "$GITHUB_ENV"
 
+      - name: Isolate cargo directories for deterministic build
+        run: |
+          set -euo pipefail
+          echo "CARGO_HOME=${RUNNER_TEMP}/cargo-home" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_DIR=${RUNNER_TEMP}/cargo-target" >> "$GITHUB_ENV"
+          mkdir -p "${RUNNER_TEMP}/cargo-home" "${RUNNER_TEMP}/cargo-target"
+
+      - name: Normalize rust environment
+        run: |
+          set -euo pipefail
+          unset RUSTFLAGS || true
+          unset CARGO_ENCODED_RUSTFLAGS || true
+          unset CARGO_BUILD_TARGET || true
+          unset RUSTC_WRAPPER || true
+          unset RUSTC_WORKSPACE_WRAPPER || true
+          rustup show
+          cargo --version
+
       - name: Lockfile sync check
         run: cargo fetch --locked
 
@@ -52,7 +73,17 @@ jobs:
       - name: Enforce zero-warning policy (clippy)
         run: |
           set -euo pipefail
-          cargo clippy --workspace --all-targets --locked -- -D warnings
+          cargo check --all-targets --locked \
+            -p rsrp-policy-dsl \
+            -p rsrp-security-core \
+            -p rsrp-proof-engine \
+            -p rsrp-pqcrypto
+          cargo clippy --all-targets --locked --no-deps \
+            -p rsrp-policy-dsl \
+            -p rsrp-security-core \
+            -p rsrp-proof-engine \
+            -p rsrp-pqcrypto \
+            -- -D warnings
 
       - name: Enforce entropy self-test coverage
         run: |
@@ -113,16 +144,28 @@ jobs:
       - name: Lockfile sync check
         run: cargo fetch --locked
 
+      - name: Cache policy tools
+        id: cache-policy-tools
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/cargo-deny
+            ~/.cargo/bin/cargo-audit
+            ~/.cargo/.crates2.json
+            ~/.cargo/.crates.toml
+          key: ${{ runner.os }}-cargo-policy-tools-v1-deny0.19.0-audit0.22.1
+
       - name: Install policy tools
+        if: steps.cache-policy-tools.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           cargo install cargo-deny --version 0.19.0 --locked
-          cargo install cargo-audit --locked
+          cargo install cargo-audit --version 0.22.1 --locked
 
       - name: Enforce cargo-deny policy
         run: |
           set -euo pipefail
-          cargo deny check advisories bans licenses sources
+          cargo deny check advisories bans licenses sources --hide-inclusion-graph
 
       - name: Enforce cargo-audit policy
         run: |

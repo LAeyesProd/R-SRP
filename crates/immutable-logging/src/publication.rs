@@ -355,54 +355,77 @@ impl PublicationService {
         let digest_bytes = hex_decode(&request.hash).map_err(TsaError::Encoding)?;
         let body = build_rfc3161_timestamp_query(&digest_bytes, &request.nonce)?;
 
+        #[cfg(not(feature = "tsa-http-client"))]
+        {
+            let _ = body;
+            return Err(TsaError::Server(
+                "HTTP TSA transport disabled (enable feature `tsa-http-client`)".to_string(),
+            ));
+        }
+
+        #[cfg(feature = "tsa-http-client")]
         tracing::info!("Requesting TSA token from {}", tsa_url);
+        #[cfg(feature = "tsa-http-client")]
         let client = reqwest::Client::new();
+        #[cfg(feature = "tsa-http-client")]
         let resp = client
             .post(tsa_url)
             .header("Content-Type", "application/timestamp-query")
             .header("Accept", "application/timestamp-reply")
             .body(body)
             .send()
-            .await?;
+            .await
+            .map_err(|e| TsaError::Network(e.to_string()))?;
 
-        let status_code = resp.status();
-        if !status_code.is_success() {
-            return Err(TsaError::Server(format!(
-                "HTTP {} from TSA endpoint",
-                status_code
-            )));
+        #[cfg(feature = "tsa-http-client")]
+        {
+            let status_code = resp.status();
+            if !status_code.is_success() {
+                return Err(TsaError::Server(format!(
+                    "HTTP {} from TSA endpoint",
+                    status_code
+                )));
+            }
+
+            let date_header = resp
+                .headers()
+                .get(reqwest::header::DATE)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string);
+            let bytes = resp
+                .bytes()
+                .await
+                .map_err(|e| TsaError::Network(e.to_string()))?;
+
+            let tsa_reply = parse_timestamp_response(&bytes)?;
+            if tsa_reply.status != 0 && tsa_reply.status != 1 {
+                return Err(TsaError::Server(format!(
+                    "TSA rejected request with status {}",
+                    tsa_reply.status
+                )));
+            }
+
+            let token_der = tsa_reply
+                .time_stamp_token_der
+                .ok_or(TsaError::InvalidResponse)?;
+
+            // Best-effort timestamp extraction from token bytes (GeneralizedTime scan).
+            // Full CMS/ESS validation is pending.
+            let timestamp = extract_generalized_time_rfc3339(&token_der)
+                .or_else(|| date_header.and_then(parse_http_date_to_rfc3339))
+                .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+
+            return Ok(TsaResponse {
+                timestamp,
+                token: base64_encode(&token_der),
+                tsa_certificate: "unparsed".to_string(),
+            });
         }
 
-        let date_header = resp
-            .headers()
-            .get(reqwest::header::DATE)
-            .and_then(|v| v.to_str().ok())
-            .map(str::to_string);
-        let bytes = resp.bytes().await?;
-
-        let tsa_reply = parse_timestamp_response(&bytes)?;
-        if tsa_reply.status != 0 && tsa_reply.status != 1 {
-            return Err(TsaError::Server(format!(
-                "TSA rejected request with status {}",
-                tsa_reply.status
-            )));
-        }
-
-        let token_der = tsa_reply
-            .time_stamp_token_der
-            .ok_or(TsaError::InvalidResponse)?;
-
-        // Best-effort timestamp extraction from token bytes (GeneralizedTime scan).
-        // Full CMS/ESS validation is pending.
-        let timestamp = extract_generalized_time_rfc3339(&token_der)
-            .or_else(|| date_header.and_then(parse_http_date_to_rfc3339))
-            .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
-
-        Ok(TsaResponse {
-            timestamp,
-            token: base64_encode(&token_der),
-            tsa_certificate: "unparsed".to_string(),
-        })
+        #[allow(unreachable_code)]
+        Err(TsaError::Server(
+            "HTTP TSA transport disabled (enable feature `tsa-http-client`)".to_string(),
+        ))
     }
 }
 
@@ -537,7 +560,7 @@ struct TsaResponse {
 #[derive(Debug, thiserror::Error)]
 pub enum TsaError {
     #[error("Network error: {0}")]
-    Network(#[from] reqwest::Error),
+    Network(String),
 
     #[error("Encoding error: {0}")]
     Encoding(String),
@@ -695,11 +718,13 @@ fn build_rfc3161_timestamp_query(
     ]))
 }
 
+#[allow(dead_code)]
 struct ParsedTsaResponse {
     status: i64,
     time_stamp_token_der: Option<Vec<u8>>,
 }
 
+#[allow(dead_code)]
 fn parse_timestamp_response(bytes: &[u8]) -> Result<ParsedTsaResponse, TsaError> {
     let (outer_tag, outer_len, outer_hdr) = der_read_tlv(bytes, 0)?;
     if outer_tag != 0x30 || outer_hdr + outer_len > bytes.len() {
@@ -753,6 +778,7 @@ fn extract_generalized_time_rfc3339(bytes: &[u8]) -> Option<String> {
     None
 }
 
+#[allow(dead_code)]
 fn parse_http_date_to_rfc3339(value: String) -> Option<String> {
     let dt = chrono::DateTime::parse_from_rfc2822(&value).ok()?;
     Some(dt.with_timezone(&Utc).to_rfc3339())
@@ -780,6 +806,7 @@ fn der_read_tlv(input: &[u8], offset: usize) -> Result<(u8, usize, usize), TsaEr
     }
 }
 
+#[allow(dead_code)]
 fn der_parse_integer_i64(bytes: &[u8]) -> Result<i64, TsaError> {
     if bytes.is_empty() || bytes.len() > 8 {
         return Err(TsaError::InvalidResponse);
