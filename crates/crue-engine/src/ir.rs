@@ -1,9 +1,11 @@
 //! Typed rule IR for compiled-policy execution paths.
 
-use crate::error::EngineError;
 use crate::decision::Decision;
+use crate::error::EngineError;
 use crue_dsl::ast::ActionNode;
-use crue_dsl::compiler::{ActionDecision as DslActionDecision, ActionInstruction as DslActionInstruction};
+use crue_dsl::compiler::{
+    ActionDecision as DslActionDecision, ActionInstruction as DslActionInstruction,
+};
 use serde::{Deserialize, Serialize};
 
 /// Typed comparison operators for deterministic rule evaluation.

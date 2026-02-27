@@ -1,5 +1,5 @@
 //! CRUE DSL Abstract Syntax Tree
-//! 
+//!
 //! Defines the AST nodes for parsed CRUE rules
 
 use serde::{Deserialize, Serialize};
@@ -53,7 +53,7 @@ pub enum Expression {
     /// Boolean literals
     True,
     False,
-    
+
     /// Numeric comparison: >, <, >=, <=, ==, !=
     Gt(Box<Expression>, Box<Expression>),
     Lt(Box<Expression>, Box<Expression>),
@@ -61,21 +61,21 @@ pub enum Expression {
     Lte(Box<Expression>, Box<Expression>),
     Eq(Box<Expression>, Box<Expression>),
     Neq(Box<Expression>, Box<Expression>),
-    
+
     /// Logical operators
     And(Box<Expression>, Box<Expression>),
     Or(Box<Expression>, Box<Expression>),
     Not(Box<Expression>),
-    
+
     /// Field access (e.g., agent.requests_last_hour)
     Field(String),
-    
+
     /// Value access
     Value(Value),
-    
+
     /// IN operator for set membership
     In(Box<Expression>, Vec<Value>),
-    
+
     /// BETWEEN operator
     Between(Box<Expression>, Box<Expression>, Box<Expression>),
 }
@@ -105,13 +105,14 @@ impl FieldPath {
     /// Parse a field path string like "agent.requests_last_hour"
     pub fn parse(path: &str) -> Result<Self, crate::error::DslError> {
         let parts: Vec<&str> = path.split('.').collect();
-        
+
         if parts.len() < 2 {
-            return Err(crate::error::DslError::ParseError(
-                format!("Invalid field path: {}", path)
-            ));
+            return Err(crate::error::DslError::ParseError(format!(
+                "Invalid field path: {}",
+                path
+            )));
         }
-        
+
         Ok(FieldPath {
             root: parts[0].to_string(),
             field: parts[1].to_string(),
@@ -125,35 +126,43 @@ impl Expression {
     pub fn field(path: &str) -> Self {
         Expression::Field(path.to_string())
     }
-    
+
     /// Create a numeric literal
     pub fn number(n: i64) -> Self {
         Expression::Value(Value::Number(n))
     }
-    
+
     /// Create a string literal
     pub fn string(s: &str) -> Self {
         Expression::Value(Value::String(s.to_string()))
     }
-    
+
     /// Create a boolean literal
     pub fn boolean(b: bool) -> Self {
-        if b { Expression::True } else { Expression::False }
+        if b {
+            Expression::True
+        } else {
+            Expression::False
+        }
     }
-    
+
     /// Check if expression is statically true
     pub fn is_static_true(&self) -> bool {
         matches!(self, Expression::True)
     }
-    
+
     /// Get all referenced fields in this expression
     pub fn referenced_fields(&self) -> Vec<String> {
         match self {
             Expression::True | Expression::False => vec![],
-            Expression::Gt(e1, e2) | Expression::Lt(e1, e2) 
-            | Expression::Gte(e1, e2) | Expression::Lte(e1, e2)
-            | Expression::Eq(e1, e2) | Expression::Neq(e1, e2)
-            | Expression::And(e1, e2) | Expression::Or(e1, e2) => {
+            Expression::Gt(e1, e2)
+            | Expression::Lt(e1, e2)
+            | Expression::Gte(e1, e2)
+            | Expression::Lte(e1, e2)
+            | Expression::Eq(e1, e2)
+            | Expression::Neq(e1, e2)
+            | Expression::And(e1, e2)
+            | Expression::Or(e1, e2) => {
                 let mut fields = e1.referenced_fields();
                 fields.extend(e2.referenced_fields());
                 fields
@@ -181,21 +190,21 @@ impl Expression {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_field_path_parse() {
         let path = FieldPath::parse("agent.requests_last_hour").unwrap();
         assert_eq!(path.root, "agent");
         assert_eq!(path.field, "requests_last_hour");
     }
-    
+
     #[test]
     fn test_expression_referenced_fields() {
         let expr = Expression::Gt(
             Box::new(Expression::field("agent.requests_last_hour")),
             Box::new(Expression::number(50)),
         );
-        
+
         let fields = expr.referenced_fields();
         assert!(fields.contains(&"agent.requests_last_hour".to_string()));
     }

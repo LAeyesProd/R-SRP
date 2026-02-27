@@ -1,9 +1,9 @@
 //! Publication - Daily audit publication
 
-use serde::{Deserialize, Serialize};
 use chrono::Utc;
-use std::io::Write;
+use serde::{Deserialize, Serialize};
 use sha2::Digest as _;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// Daily audit publication
@@ -44,8 +44,7 @@ impl DailyPublication {
     /// Export as gzip-compressed canonical JSON.
     pub fn to_canonical_json_gzip(&self) -> Result<Vec<u8>, crate::error::LogError> {
         let json = self.to_canonical_json_bytes()?;
-        let mut encoder =
-            flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
         encoder
             .write_all(&json)
             .map_err(|e| crate::error::LogError::SerializationError(e.to_string()))?;
@@ -153,7 +152,7 @@ impl PublicationService {
             previous_day_root: None,
         }
     }
-    
+
     /// Create daily publication
     pub fn create_daily_publication(
         &self,
@@ -164,10 +163,10 @@ impl PublicationService {
         let previous = self.previous_day_root.clone().unwrap_or_else(|| {
             "0000000000000000000000000000000000000000000000000000000000000000".to_string()
         });
-        
+
         // Compute root hash of all hourly roots
         let root_hash = Self::compute_merkle_root(hourly_roots);
-        
+
         DailyPublication {
             date,
             root_hash,
@@ -179,20 +178,20 @@ impl PublicationService {
             tsa_timestamp: None,
         }
     }
-    
+
     /// Compute merkle root from list of hashes
     fn compute_merkle_root(hashes: &[String]) -> String {
         if hashes.is_empty() {
             return "0000000000000000000000000000000000000000000000000000000000000000".to_string();
         }
-        
-        use sha2::{Sha256, Digest};
-        
+
+        use sha2::{Digest, Sha256};
+
         let mut current: Vec<String> = hashes.to_vec();
-        
+
         while current.len() > 1 {
             let mut next = Vec::new();
-            
+
             for chunk in current.chunks(2) {
                 if chunk.len() == 2 {
                     let mut hasher = Sha256::new();
@@ -203,13 +202,13 @@ impl PublicationService {
                     next.push(chunk[0].clone());
                 }
             }
-            
+
             current = next;
         }
-        
+
         current[0].clone()
     }
-    
+
     /// Sign publication
     pub fn sign_publication(&mut self, publication: &mut DailyPublication, signature: &[u8]) {
         self.sign_publication_with_metadata(
@@ -233,7 +232,7 @@ impl PublicationService {
             key_id: key_id.to_string(),
             value: base64_encode(signature),
         });
-        
+
         // Store previous day root for chaining
         self.previous_day_root = Some(publication.root_hash.clone());
     }
@@ -261,9 +260,12 @@ impl PublicationService {
             None
         };
 
-        Ok(FilesystemPublication { json_path, gzip_path })
+        Ok(FilesystemPublication {
+            json_path,
+            gzip_path,
+        })
     }
-     
+
     /// Add TSA timestamp metadata.
     ///
     /// `mock://` URLs are supported for local testing.
@@ -277,7 +279,7 @@ impl PublicationService {
     ) -> Result<(), TsaError> {
         // Serialize publication hash for TSA request
         let hash_to_timestamp = &publication.root_hash;
-        
+
         // In production, this would be a proper RFC 3161 request
         // For now, we'll implement a basic timestamp request structure
         let timestamp_request = TsaRequest {
@@ -285,16 +287,16 @@ impl PublicationService {
             algorithm: "SHA256".to_string(),
             nonce: uuid::Uuid::new_v4().to_string(),
         };
-        
+
         // Make request to TSA (in production, use actual TSA server)
         let response = self.request_timestamp(&tsa_url, &timestamp_request).await?;
-        
+
         publication.tsa_timestamp = Some(TsaTimestamp {
             tsa_url: tsa_url.to_string(),
             timestamp: response.timestamp,
             token: response.token,
         });
-        
+
         tracing::info!(
             "TSA timestamp added for publication {} at {}",
             publication.date,
@@ -304,16 +306,20 @@ impl PublicationService {
                 .map(|t| t.timestamp.as_str())
                 .map_or("unknown", |v| v)
         );
-        
+
         Ok(())
     }
-    
+
     /// Request timestamp from TSA server.
     ///
     /// Supports:
     /// - `mock://...` for tests
     /// - `http(s)://...` experimental RFC 3161 transport (token retrieval only)
-    async fn request_timestamp(&self, tsa_url: &str, request: &TsaRequest) -> Result<TsaResponse, TsaError> {
+    async fn request_timestamp(
+        &self,
+        tsa_url: &str,
+        request: &TsaRequest,
+    ) -> Result<TsaResponse, TsaError> {
         if tsa_url.starts_with("mock://") {
             tracing::warn!("Using mock TSA timestamp provider: {}", tsa_url);
             return Ok(TsaResponse {
@@ -386,7 +392,7 @@ impl TsaTimestamp {
     ///
     /// This does not perform CMS/PKCS#7 signature validation.
     pub fn inspect_token(&self) -> TsaTokenInspection {
-        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
 
         if self.token.is_empty() {
             return TsaTokenInspection {
@@ -427,10 +433,10 @@ impl TsaTimestamp {
         &self,
         trust_store_pem: &[u8],
     ) -> Result<TsaCmsVerification, TsaCmsVerifyError> {
-        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
         use openssl::pkcs7::{Pkcs7, Pkcs7Flags};
         use openssl::stack::Stack;
-        use openssl::x509::{X509, store::X509StoreBuilder};
+        use openssl::x509::{store::X509StoreBuilder, X509};
 
         if self.token.is_empty() {
             return Err(TsaCmsVerifyError::TokenMissing);
@@ -441,13 +447,13 @@ impl TsaTimestamp {
             .map_err(|e| TsaCmsVerifyError::TokenBase64(e.to_string()))?;
         let extracted_timestamp = extract_generalized_time_rfc3339(&der);
 
-        let pkcs7 = Pkcs7::from_der(&der)
-            .map_err(|e| TsaCmsVerifyError::Pkcs7Parse(e.to_string()))?;
+        let pkcs7 =
+            Pkcs7::from_der(&der).map_err(|e| TsaCmsVerifyError::Pkcs7Parse(e.to_string()))?;
 
         let certs = X509::stack_from_pem(trust_store_pem)
             .map_err(|e| TsaCmsVerifyError::TrustStore(e.to_string()))?;
-        let mut store_builder = X509StoreBuilder::new()
-            .map_err(|e| TsaCmsVerifyError::TrustStore(e.to_string()))?;
+        let mut store_builder =
+            X509StoreBuilder::new().map_err(|e| TsaCmsVerifyError::TrustStore(e.to_string()))?;
         for cert in certs {
             store_builder
                 .add_cert(cert)
@@ -516,20 +522,20 @@ pub enum TsaError {
 
     #[error("Encoding error: {0}")]
     Encoding(String),
-    
+
     #[error("TSA server error: {0}")]
     Server(String),
 
     #[error("Unsupported TSA URL scheme: {0}")]
     UnsupportedScheme(String),
-    
+
     #[error("Invalid response from TSA")]
     InvalidResponse,
 }
 
 /// Base64 encode
 fn base64_encode(data: &[u8]) -> String {
-    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
     STANDARD.encode(data)
 }
 
@@ -543,7 +549,10 @@ fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
         .collect()
 }
 
-fn build_rfc3161_timestamp_query(message_digest: &[u8], nonce_text: &str) -> Result<Vec<u8>, TsaError> {
+fn build_rfc3161_timestamp_query(
+    message_digest: &[u8],
+    nonce_text: &str,
+) -> Result<Vec<u8>, TsaError> {
     // We support SHA-256 only in this implementation path.
     if message_digest.len() != 32 {
         return Err(TsaError::Encoding(format!(
@@ -559,16 +568,13 @@ fn build_rfc3161_timestamp_query(message_digest: &[u8], nonce_text: &str) -> Res
         der_oid(&[2, 16, 840, 1, 101, 3, 4, 2, 1]), // sha256
         der_null(),
     ]);
-    let message_imprint = der_sequence(&[
-        algorithm_identifier,
-        der_octet_string(message_digest),
-    ]);
+    let message_imprint = der_sequence(&[algorithm_identifier, der_octet_string(message_digest)]);
 
     Ok(der_sequence(&[
-        der_integer_u64(1),      // version v1
+        der_integer_u64(1), // version v1
         message_imprint,
-        nonce,                    // nonce
-        der_boolean(true),        // certReq = TRUE
+        nonce,             // nonce
+        der_boolean(true), // certReq = TRUE
     ]))
 }
 
@@ -619,8 +625,7 @@ fn extract_generalized_time_rfc3339(bytes: &[u8]) -> Option<String> {
             }
             let s = std::str::from_utf8(&bytes[i + hdr..i + hdr + len]).ok()?;
             if let Some(trimmed) = s.strip_suffix('Z') {
-                if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(trimmed, "%Y%m%d%H%M%S")
-                {
+                if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(trimmed, "%Y%m%d%H%M%S") {
                     let dt = chrono::DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc);
                     return Some(dt.to_rfc3339());
                 }
@@ -768,10 +773,10 @@ fn der_oid(oid: &[u32]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
     use std::io::Read;
     use tempfile::tempdir;
-    
+
     #[test]
     fn test_daily_publication_and_signature_chain() {
         let mut service = PublicationService::new();
@@ -809,7 +814,10 @@ mod tests {
                 .expect("mock TSA works");
         });
 
-        let tsa = publication.tsa_timestamp.as_ref().expect("tsa timestamp set");
+        let tsa = publication
+            .tsa_timestamp
+            .as_ref()
+            .expect("tsa timestamp set");
         assert_eq!(tsa.tsa_url, "mock://tsa");
         assert!(tsa.token.starts_with("mock-sha256="));
     }
@@ -843,7 +851,9 @@ mod tests {
         let digest = [0x11u8; 32];
         let req = build_rfc3161_timestamp_query(&digest, "nonce").expect("query");
         // sha256 OID bytes: 06 09 60 86 48 01 65 03 04 02 01
-        let oid = [0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01];
+        let oid = [
+            0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01,
+        ];
         assert!(req.windows(oid.len()).any(|w| w == oid));
     }
 
@@ -909,7 +919,8 @@ mod tests {
     #[test]
     fn test_verify_root_hash_detects_tamper() {
         let service = PublicationService::new();
-        let mut publication = service.create_daily_publication(&["aa".repeat(32), "bb".repeat(32)], 2);
+        let mut publication =
+            service.create_daily_publication(&["aa".repeat(32), "bb".repeat(32)], 2);
         assert!(publication.verify_root_hash());
 
         publication.hourly_roots.push("cc".repeat(32));
@@ -921,7 +932,10 @@ mod tests {
         let tsa = TsaTimestamp {
             tsa_url: "https://tsa.example".to_string(),
             timestamp: "2026-02-26T00:00:00Z".to_string(),
-            token: base64_encode(&[0x18, 0x0f, b'2', b'0', b'2', b'6', b'0', b'2', b'2', b'6', b'0', b'8', b'3', b'0', b'4', b'5', b'Z']),
+            token: base64_encode(&[
+                0x18, 0x0f, b'2', b'0', b'2', b'6', b'0', b'2', b'2', b'6', b'0', b'8', b'3', b'0',
+                b'4', b'5', b'Z',
+            ]),
         };
         let inspected = tsa.inspect_token();
         assert!(inspected.token_present);
@@ -1010,7 +1024,9 @@ mod tests {
         let json_bytes = std::fs::read(&written.json_path).expect("json bytes");
         assert_eq!(
             json_bytes,
-            publication.to_canonical_json_bytes().expect("canonical json")
+            publication
+                .to_canonical_json_bytes()
+                .expect("canonical json")
         );
 
         let gz_bytes = std::fs::read(gzip_path).expect("gzip bytes");

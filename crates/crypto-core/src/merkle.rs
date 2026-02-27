@@ -1,7 +1,7 @@
 //! Merkle Tree implementation for hourly audit logs
 
-use crate::{HashAlgorithm, Result, CryptoError};
 use crate::hash::hash;
+use crate::{CryptoError, HashAlgorithm, Result};
 use serde::{Deserialize, Serialize};
 
 /// Merkle tree node
@@ -46,22 +46,22 @@ impl MerkleTree {
             leaves: Vec::new(),
         }
     }
-    
+
     /// Add a leaf
     pub fn add_leaf(&mut self, data: Vec<u8>) {
         // Hash the leaf data
         let leaf_hash = hash(&data, self.algorithm).unwrap_or_default();
         self.leaves.push(leaf_hash);
     }
-    
+
     /// Build the tree and return root
     pub fn build(&self) -> Option<MerkleRoot> {
         if self.leaves.is_empty() {
             return None;
         }
-        
+
         let root = self.build_tree(&self.leaves);
-        
+
         Some(MerkleRoot {
             hour: chrono::Utc::now().format("%Y-%m-%dT%H:00:00Z").to_string(),
             root_hash: hex_encode(&root),
@@ -70,50 +70,50 @@ impl MerkleTree {
             algorithm: self.algorithm,
         })
     }
-    
+
     /// Recursively build tree
     fn build_tree(&self, nodes: &[Vec<u8>]) -> Vec<u8> {
         if nodes.is_empty() {
             return vec![0u8; 32]; // Empty hash
         }
-        
+
         if nodes.len() == 1 {
             return nodes[0].clone();
         }
-        
+
         let mid = (nodes.len() + 1) / 2;
         let left = self.build_tree(&nodes[..mid]);
         let right = self.build_tree(&nodes[mid..]);
-        
+
         // Concatenate and hash
         let combined: Vec<u8> = left.iter().chain(right.iter()).cloned().collect();
         hash(&combined, self.algorithm).unwrap_or_else(|_| vec![0u8; 32])
     }
-    
+
     /// Generate proof for a leaf
     pub fn generate_proof(&self, index: usize) -> Option<MerkleProof> {
         if index >= self.leaves.len() {
             return None;
         }
-        
+
         let mut proof = MerkleProof {
             leaf_index: index,
             leaf_hash: hex_encode(&self.leaves[index]),
             path: Vec::new(),
         };
-        
+
         self.build_proof(&self.leaves, index, &mut proof.path);
-        
+
         Some(proof)
     }
-    
+
     fn build_proof(&self, nodes: &[Vec<u8>], index: usize, path: &mut Vec<MerkleProofStep>) {
         if nodes.len() <= 1 {
             return;
         }
-        
+
         let mid = (nodes.len() + 1) / 2;
-        
+
         if index < mid {
             // Build leaf-to-root proof ordering: recurse first, then append sibling subtree root.
             self.build_proof(&nodes[..mid], index, path);
@@ -150,19 +150,19 @@ pub struct MerkleProof {
 /// Verify a Merkle proof
 pub fn verify_proof(proof: &MerkleProof, root_hash: &str, algorithm: HashAlgorithm) -> bool {
     let mut current_hash = hex_decode(&proof.leaf_hash).unwrap_or_default();
-    
+
     for step in &proof.path {
         let sibling = hex_decode(&step.hash).unwrap_or_default();
-        
+
         let combined: Vec<u8> = if step.side == "left" {
             sibling.iter().chain(current_hash.iter()).cloned().collect()
         } else {
             current_hash.iter().chain(sibling.iter()).cloned().collect()
         };
-        
+
         current_hash = hash(&combined, algorithm).unwrap_or_default();
     }
-    
+
     hex_encode(&current_hash) == root_hash
 }
 
@@ -176,7 +176,7 @@ fn hex_decode(s: &str) -> Result<Vec<u8>> {
     if s.len() % 2 != 0 {
         return Err(CryptoError::HashError("Invalid hex string".to_string()));
     }
-    
+
     (0..s.len())
         .step_by(2)
         .map(|i| {
@@ -189,32 +189,32 @@ fn hex_decode(s: &str) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_merkle_tree() {
         let mut tree = MerkleTree::new(HashAlgorithm::Sha256);
-        
+
         tree.add_leaf(b"leaf1".to_vec());
         tree.add_leaf(b"leaf2".to_vec());
         tree.add_leaf(b"leaf3".to_vec());
         tree.add_leaf(b"leaf4".to_vec());
-        
+
         let root = tree.build().unwrap();
         assert!(!root.root_hash.is_empty());
         assert_eq!(root.leaf_count, 4);
     }
-    
+
     #[test]
     fn test_merkle_proof() {
         let mut tree = MerkleTree::new(HashAlgorithm::Blake3);
-        
+
         for i in 0..8 {
             tree.add_leaf(format!("data{}", i).as_bytes().to_vec());
         }
-        
+
         let root = tree.build().unwrap();
         let proof = tree.generate_proof(0).unwrap();
-        
+
         assert!(verify_proof(&proof, &root.root_hash, HashAlgorithm::Blake3));
     }
 }

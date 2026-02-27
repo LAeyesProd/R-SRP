@@ -4,9 +4,9 @@ use crate::context::EvaluationContext;
 use crate::decision::{ActionResult, Decision};
 use crate::error::EngineError;
 use crate::ir::{ActionInstruction, RuleEffect};
-use crate::proof::{ProofBinding, ProofEnvelope, ProofEnvelopeV1};
 #[cfg(feature = "pq-proof")]
 use crate::proof::PqProofEnvelope;
+use crate::proof::{ProofBinding, ProofEnvelope, ProofEnvelopeV1};
 use crate::rules::RuleRegistry;
 use crate::vm::{ActionVm, BytecodeVm, Instruction};
 use crate::{EvaluationRequest, EvaluationResult};
@@ -30,8 +30,8 @@ pub struct CompiledPolicyRule {
 impl CompiledPolicyRule {
     pub fn from_ast(ast: &RuleAst) -> Result<Self, EngineError> {
         let policy_hash = hash_policy_ast(ast)?;
-        let bytecode = Compiler::compile(ast)
-            .map_err(|e| EngineError::CompilationError(e.to_string()))?;
+        let bytecode =
+            Compiler::compile(ast).map_err(|e| EngineError::CompilationError(e.to_string()))?;
         let effects = ast
             .then_clause
             .clone()
@@ -73,7 +73,10 @@ impl CompiledPolicyRule {
     }
 
     /// Preferred compiled-path evaluation: returns `Some(decision)` on match, `None` otherwise.
-    pub fn evaluate_match_decision(&self, ctx: &EvaluationContext) -> Result<Option<Decision>, EngineError> {
+    pub fn evaluate_match_decision(
+        &self,
+        ctx: &EvaluationContext,
+    ) -> Result<Option<Decision>, EngineError> {
         BytecodeVm::eval_match_program(&self.match_program, &self.bytecode, ctx)
     }
 
@@ -118,7 +121,8 @@ impl CrueEngine {
 
     /// Register a compiled rule from DSL source.
     pub fn register_compiled_rule_source(&mut self, source: &str) -> Result<(), EngineError> {
-        self.compiled_rules.push(CompiledPolicyRule::from_source(source)?);
+        self.compiled_rules
+            .push(CompiledPolicyRule::from_source(source)?);
         Ok(())
     }
 
@@ -365,7 +369,10 @@ impl CrueEngine {
                         ) {
                             Ok(binding) => Some(binding),
                             Err(e) => {
-                                error!("Failed to build proof binding for compiled rule {}: {}", rule.id, e);
+                                error!(
+                                    "Failed to build proof binding for compiled rule {}: {}",
+                                    rule.id, e
+                                );
                                 if self.strict_mode {
                                     return Some((
                                         engine_error_result(
@@ -401,7 +408,10 @@ impl CrueEngine {
                             None,
                         ));
                     } else {
-                        warn!("Non-strict mode: continuing after error in compiled rule {}", rule.id);
+                        warn!(
+                            "Non-strict mode: continuing after error in compiled rule {}",
+                            rule.id
+                        );
                     }
                 }
             }
@@ -453,7 +463,10 @@ impl CrueEngine {
                             start.elapsed().as_millis() as u64,
                         );
                     } else {
-                        warn!("Non-strict mode: continuing after error in rule {}", rule.id);
+                        warn!(
+                            "Non-strict mode: continuing after error in rule {}",
+                            rule.id
+                        );
                     }
                 }
             }
@@ -499,14 +512,14 @@ fn compiled_actions_to_result(actions: &[RuleEffect]) -> ActionResult {
         .unwrap_or(RuleEffect::Log);
 
     let mut result = match primary {
-        RuleEffect::Block { code, message } => ActionResult::block(
-            &code,
-            message.as_deref().unwrap_or("Access denied"),
-        ),
-        RuleEffect::Warn { code } => ActionResult::warn(&code, "Policy warning"),
-        RuleEffect::RequireApproval { code, timeout_minutes } => {
-            ActionResult::approval_required(&code, timeout_minutes)
+        RuleEffect::Block { code, message } => {
+            ActionResult::block(&code, message.as_deref().unwrap_or("Access denied"))
         }
+        RuleEffect::Warn { code } => ActionResult::warn(&code, "Policy warning"),
+        RuleEffect::RequireApproval {
+            code,
+            timeout_minutes,
+        } => ActionResult::approval_required(&code, timeout_minutes),
         RuleEffect::Log | RuleEffect::AlertSoc => ActionResult::allow(),
     };
 
@@ -559,9 +572,12 @@ fn compile_action_program(actions: &[RuleEffect]) -> Vec<ActionInstruction> {
 }
 
 fn hash_policy_ast(ast: &RuleAst) -> Result<String, EngineError> {
-    let bytes = serde_json::to_vec(ast)
-        .map_err(|e| EngineError::CompilationError(format!("Policy AST serialization error: {}", e)))?;
-    Ok(crypto_core::hash::hex_encode(&crypto_core::hash::sha256(&bytes)))
+    let bytes = serde_json::to_vec(ast).map_err(|e| {
+        EngineError::CompilationError(format!("Policy AST serialization error: {}", e))
+    })?;
+    Ok(crypto_core::hash::hex_encode(&crypto_core::hash::sha256(
+        &bytes,
+    )))
 }
 
 fn build_eval_result(
@@ -804,12 +820,8 @@ THEN
         };
         let kp = crypto_core::signature::Ed25519KeyPair::generate().unwrap();
         let pk = kp.verifying_key();
-        let (result, envelope) = engine.evaluate_with_signed_proof_ed25519(
-            &request,
-            "mock-crypto",
-            "proof-key-1",
-            &kp,
-        );
+        let (result, envelope) =
+            engine.evaluate_with_signed_proof_ed25519(&request, "mock-crypto", "proof-key-1", &kp);
         assert_eq!(result.decision, Decision::Block);
         let envelope = envelope.expect("compiled path should produce signed envelope");
         assert_eq!(envelope.binding.crypto_backend_id, "mock-crypto");
@@ -850,8 +862,12 @@ THEN
         };
         let kp = crypto_core::signature::Ed25519KeyPair::generate().unwrap();
         let pk = kp.verifying_key();
-        let (result, envelope) =
-            engine.evaluate_with_signed_proof_v1_ed25519(&request, "mock-crypto", "proof-key-v1", &kp);
+        let (result, envelope) = engine.evaluate_with_signed_proof_v1_ed25519(
+            &request,
+            "mock-crypto",
+            "proof-key-v1",
+            &kp,
+        );
         assert_eq!(result.decision, Decision::Block);
         let envelope = envelope.expect("compiled path should produce v1 envelope");
         assert_eq!(envelope.decision().unwrap(), Decision::Block);
@@ -939,8 +955,12 @@ THEN
         let signer = pqcrypto::hybrid::HybridSigner::new(pqcrypto::DilithiumLevel::Dilithium2);
         let keypair = signer.generate_keypair().unwrap();
         let public_key = keypair.public_key();
-        let (result, envelope) =
-            engine.evaluate_with_signed_proof_v1_hybrid(&request, "proof-key-v1-pq", &signer, &keypair);
+        let (result, envelope) = engine.evaluate_with_signed_proof_v1_hybrid(
+            &request,
+            "proof-key-v1-pq",
+            &signer,
+            &keypair,
+        );
         assert_eq!(result.decision, Decision::Block);
         let envelope = envelope.expect("compiled path should produce v1 hybrid envelope");
         assert_eq!(envelope.decision().unwrap(), Decision::Block);

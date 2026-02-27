@@ -1,6 +1,16 @@
 use chrono::Utc;
-use crue_engine::{context::EvaluationContext, engine::CrueEngine, rules::{Rule, RuleAction, RuleCondition, RuleRegistry}, vm::BytecodeVm, EvaluationRequest};
-use immutable_logging::{chain::verify_chain_proof, log_entry::{Decision as LogDecision, EventType, LogEntry}, ImmutableLog};
+use crue_engine::{
+    context::EvaluationContext,
+    engine::CrueEngine,
+    rules::{Rule, RuleAction, RuleCondition, RuleRegistry},
+    vm::BytecodeVm,
+    EvaluationRequest,
+};
+use immutable_logging::{
+    chain::verify_chain_proof,
+    log_entry::{Decision as LogDecision, EventType, LogEntry},
+    ImmutableLog,
+};
 use pqcrypto::{hybrid::HybridSigner, Dilithium, DilithiumLevel};
 
 fn map_decision(d: crue_engine::decision::Decision) -> LogDecision {
@@ -25,8 +35,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         name: "DEMO_VOLUME".into(),
         description: "Block at 50 req/h".into(),
         severity: "HIGH".into(),
-        condition: RuleCondition { field: "agent.requests_last_hour".into(), operator: ">=".into(), value: 50 },
-        action: RuleAction { action_type: "BLOCK".into(), error_code: Some("VOLUME_EXCEEDED".into()), message: Some("Demo policy matched".into()), timeout_minutes: None, alert_soc: true },
+        condition: RuleCondition {
+            field: "agent.requests_last_hour".into(),
+            operator: ">=".into(),
+            value: 50,
+        },
+        action: RuleAction {
+            action_type: "BLOCK".into(),
+            error_code: Some("VOLUME_EXCEEDED".into()),
+            message: Some("Demo policy matched".into()),
+            timeout_minutes: None,
+            alert_soc: true,
+        },
         valid_from: Utc::now(),
         valid_until: None,
         enabled: true,
@@ -35,9 +55,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     engine.load_rules(registry);
     engine.register_compiled_rule_ast(&ast)?;
     let req = EvaluationRequest {
-        request_id: "demo-req-001".into(), agent_id: "agent-007".into(), agent_org: "ACME".into(), agent_level: "standard".into(),
-        mission_id: None, mission_type: None, query_type: None, justification: Some("monthly audit".into()), export_format: None, result_limit: Some(10),
-        requests_last_hour: 55, requests_last_24h: 120, results_last_query: 3, account_department: None, allowed_departments: vec![], request_hour: 10, is_within_mission_hours: true,
+        request_id: "demo-req-001".into(),
+        agent_id: "agent-007".into(),
+        agent_org: "ACME".into(),
+        agent_level: "standard".into(),
+        mission_id: None,
+        mission_type: None,
+        query_type: None,
+        justification: Some("monthly audit".into()),
+        export_format: None,
+        result_limit: Some(10),
+        requests_last_hour: 55,
+        requests_last_24h: 120,
+        results_last_query: 3,
+        account_department: None,
+        allowed_departments: vec![],
+        request_hour: 10,
+        is_within_mission_hours: true,
     };
     let engine_hybrid_signer = HybridSigner::new(DilithiumLevel::Dilithium2);
     let engine_hybrid_kp = engine_hybrid_signer.generate_keypair()?;
@@ -48,7 +82,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &engine_hybrid_signer,
         &engine_hybrid_kp,
     );
-    let (_eval2, engine_binding) = engine.evaluate_with_proof(&req, engine_hybrid_signer.backend_id());
+    let (_eval2, engine_binding) =
+        engine.evaluate_with_proof(&req, engine_hybrid_signer.backend_id());
     let ctx = EvaluationContext::from_request(&req);
     let vm_eval = BytecodeVm::eval(&bytecode, &ctx)?;
 
@@ -86,8 +121,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let log = ImmutableLog::new();
-    let mut builder = LogEntry::builder(EventType::RuleViolation, req.agent_id.clone(), req.agent_org.clone())
-        .decision(map_decision(eval.decision));
+    let mut builder = LogEntry::builder(
+        EventType::RuleViolation,
+        req.agent_id.clone(),
+        req.agent_org.clone(),
+    )
+    .decision(map_decision(eval.decision));
     if let Some(rule_id) = &eval.rule_id {
         builder = builder.rule_id(rule_id.clone());
     }
@@ -97,7 +136,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let entry = builder.build()?;
     let appended = log.append(entry).await?;
     let ledger_proof_attached = appended.proof_envelope_v1_b64().is_some();
-    let proof = log.get_chain_proof(appended.entry_id()).await.ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "proof missing"))?;
+    let proof = log
+        .get_chain_proof(appended.entry_id())
+        .await
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "proof missing"))?;
     let proof_ok = verify_chain_proof(&proof);
     let chain_ok = log.verify().await?;
 

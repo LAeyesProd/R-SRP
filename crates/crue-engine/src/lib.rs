@@ -1,16 +1,16 @@
 //! CRUE Engine - Deterministic Rule Execution Engine
-//! 
+//!
 //! This is the core of the Zero-Trust access control system.
 //! Rules are immutable, versioned, signed, and cannot be bypassed.
 
-pub mod engine;
 pub mod context;
 pub mod decision;
-pub mod rules;
+pub mod engine;
 pub mod error;
-pub mod vm;
-pub mod proof;
 pub mod ir;
+pub mod proof;
+pub mod rules;
+pub mod vm;
 
 use serde::{Deserialize, Serialize};
 
@@ -82,13 +82,13 @@ impl Default for EvaluationResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_default_result() {
         let result = EvaluationResult::default();
         assert_eq!(result.decision, decision::Decision::Allow);
     }
-    
+
     #[test]
     fn test_evaluation_request_serialization() {
         let request = EvaluationRequest {
@@ -110,7 +110,7 @@ mod tests {
             request_hour: 14,
             is_within_mission_hours: true,
         };
-        
+
         let json = serde_json::to_string(&request).unwrap();
         assert!(json.contains("AGENT_001"));
     }

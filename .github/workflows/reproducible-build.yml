@@ -30,6 +30,9 @@ jobs:
       
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Prefetch dependencies
+        run: cargo fetch --locked
       
       - name: Set SOURCE_DATE_EPOCH
         run: |
@@ -45,7 +48,7 @@ jobs:
               -p rsrp-proof-engine \
               -p rsrp-pqcrypto
           else
-            cargo build --release --locked --frozen --workspace
+            cargo build --release --locked --workspace
           fi
       
       - name: Calculate binary hashes
@@ -81,10 +84,13 @@ jobs:
       
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-      
+
       - name: Install build dependencies
         run: |
           dnf install -y git curl tar gcc gcc-c++ make pkgconfig openssl-devel
+
+      - name: Prefetch dependencies
+        run: cargo fetch --locked
       
       - name: Set SOURCE_DATE_EPOCH
         run: |
@@ -92,7 +98,7 @@ jobs:
       
       - name: Build release
         run: |
-          cargo build --release --locked --frozen --workspace
+          cargo build --release --locked --workspace
       
       - name: Calculate binary hashes
         run: |
@@ -133,14 +139,25 @@ jobs:
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
+
+      - name: Install cross toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Prefetch dependencies
+        run: cargo fetch --locked
       
       - name: Set SOURCE_DATE_EPOCH
         run: |
           echo "SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)" >> $GITHUB_ENV
       
       - name: Build release (ARM64)
+        env:
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
         run: |
-          cargo build --release --locked --frozen --workspace --target aarch64-unknown-linux-gnu
+          cargo build --release --locked --workspace --target aarch64-unknown-linux-gnu
       
       - name: Calculate binary hashes
         run: |

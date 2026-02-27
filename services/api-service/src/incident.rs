@@ -1,5 +1,5 @@
 //! Incident Response Module
-//! 
+//!
 //! Provides structured incident response capabilities for R-SRP including:
 //! - Incident detection and classification
 //! - Automated response playbooks
@@ -7,8 +7,8 @@
 //! - Runbook automation
 //! - Alerting and escalation
 
-use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
 /// Incident severity levels
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -140,12 +140,12 @@ impl IncidentService {
             playbooks: Vec::new(),
             soc_webhook: None,
         };
-        
+
         // Load default playbooks
         service.init_default_playbooks();
         service
     }
-    
+
     /// Initialize default incident response playbooks
     fn init_default_playbooks(&mut self) {
         self.playbooks = vec![
@@ -251,12 +251,12 @@ impl IncidentService {
             },
         ];
     }
-    
+
     /// Configure SOC webhook
     pub fn set_soc_webhook(&mut self, url: String) {
         self.soc_webhook = Some(url);
     }
-    
+
     /// Create new incident
     pub fn create_incident(
         &mut self,
@@ -287,26 +287,26 @@ impl IncidentService {
             playbook_executed: None,
             resolution: None,
         };
-        
+
         self.incidents.push(incident.clone());
-        
+
         // Auto-trigger playbook if available
         self.trigger_playbook(&incident);
-        
+
         // Alert SOC if configured
         if let Some(ref webhook) = self.soc_webhook {
             self.send_soc_alert(&incident, webhook);
         }
-        
+
         incident
     }
-    
+
     /// Trigger appropriate playbook
     fn trigger_playbook(&mut self, incident: &Incident) {
         // Find matching playbook
         if let Some(playbook) = self.playbooks.iter().find(|pb| {
-            pb.triggered_by.contains(&incident.incident_type) 
-            && self.severity_meets_threshold(&incident.severity, &pb.severity_threshold)
+            pb.triggered_by.contains(&incident.incident_type)
+                && self.severity_meets_threshold(&incident.severity, &pb.severity_threshold)
         }) {
             // Execute playbook (simulated)
             tracing::info!(
@@ -314,7 +314,7 @@ impl IncidentService {
                 playbook.id,
                 incident.id
             );
-            
+
             // Update incident
             if let Some(inc) = self.incidents.iter_mut().find(|i| i.id == incident.id) {
                 inc.playbook_executed = Some(playbook.id.clone());
@@ -328,7 +328,7 @@ impl IncidentService {
             }
         }
     }
-    
+
     /// Check if severity meets threshold
     fn severity_meets_threshold(&self, severity: &Severity, threshold: &Severity) -> bool {
         let severity_order = |s: &Severity| match s {
@@ -338,10 +338,10 @@ impl IncidentService {
             Severity::Low => 2,
             Severity::Info => 1,
         };
-        
+
         severity_order(severity) >= severity_order(threshold)
     }
-    
+
     /// Send alert to SOC
     fn send_soc_alert(&self, incident: &Incident, webhook: &str) {
         // In production, this would make an HTTP POST to the SOC
@@ -353,9 +353,13 @@ impl IncidentService {
             incident.title
         );
     }
-    
+
     /// Update incident status
-    pub fn update_status(&mut self, incident_id: &str, status: IncidentStatus) -> Option<&Incident> {
+    pub fn update_status(
+        &mut self,
+        incident_id: &str,
+        status: IncidentStatus,
+    ) -> Option<&Incident> {
         if let Some(inc) = self.incidents.iter_mut().find(|i| i.id == incident_id) {
             inc.status = status.clone();
             inc.updated_at = Utc::now();
@@ -368,15 +372,17 @@ impl IncidentService {
         }
         self.incidents.iter().find(|i| i.id == incident_id)
     }
-    
+
     /// Get active incidents
     pub fn get_active_incidents(&self) -> Vec<&Incident> {
         self.incidents
             .iter()
-            .filter(|i| i.status != IncidentStatus::Closed && i.status != IncidentStatus::FalsePositive)
+            .filter(|i| {
+                i.status != IncidentStatus::Closed && i.status != IncidentStatus::FalsePositive
+            })
             .collect()
     }
-    
+
     /// Resolve incident
     pub fn resolve_incident(&mut self, incident_id: &str, resolution: String) -> Option<&Incident> {
         if let Some(inc) = self.incidents.iter_mut().find(|i| i.id == incident_id) {
@@ -397,11 +403,11 @@ impl IncidentService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_create_incident() {
         let mut service = IncidentService::new();
-        
+
         let incident = service.create_incident(
             IncidentType::AnomalyDetection,
             Severity::Medium,
@@ -409,14 +415,14 @@ mod tests {
             "Test description".to_string(),
             vec!["server-1".to_string()],
         );
-        
+
         assert_eq!(incident.status, IncidentStatus::Open);
     }
-    
+
     #[test]
     fn test_severity_threshold() {
         let service = IncidentService::new();
-        
+
         assert!(service.severity_meets_threshold(&Severity::Critical, &Severity::Low));
         assert!(service.severity_meets_threshold(&Severity::High, &Severity::High));
         assert!(!service.severity_meets_threshold(&Severity::Low, &Severity::High));

@@ -1,5 +1,5 @@
 //! CRUE DSL - Domain Specific Language for Zero-Trust Rules
-//! 
+//!
 //! This module provides a compiled DSL for defining access control rules
 //! that are signed, versioned, and cannot be bypassed at runtime.
 //!
@@ -15,10 +15,10 @@
 //! ```
 
 pub mod ast;
-pub mod parser;
 pub mod compiler;
-pub mod signature;
 pub mod error;
+pub mod parser;
+pub mod signature;
 
 use serde::{Deserialize, Serialize};
 
@@ -150,7 +150,7 @@ mod tests {
             error_code: "VOLUME_EXCEEDED".to_string(),
             error_message: Some("Quota dépassé".to_string()),
         };
-        
+
         let json = serde_json::to_string(&action).unwrap();
         assert!(json.contains("VOLUME_EXCEEDED"));
     }

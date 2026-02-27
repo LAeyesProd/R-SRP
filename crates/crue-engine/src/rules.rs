@@ -44,32 +44,39 @@ impl Rule {
     /// Check if rule is valid now
     pub fn is_valid_now(&self) -> bool {
         let now = Utc::now();
-        
+
         if now < self.valid_from {
             return false;
         }
-        
+
         if let Some(until) = self.valid_until {
             if now > until {
                 return false;
             }
         }
-        
+
         self.enabled
     }
-    
+
     /// Evaluate condition against context
     pub fn evaluate(&self, ctx: &EvaluationContext) -> Result<bool, EngineError> {
-        let field_value = ctx.get_field(&self.condition.field)
+        let field_value = ctx
+            .get_field(&self.condition.field)
             .ok_or_else(|| EngineError::FieldNotFound(self.condition.field.clone()))?;
-        
+
         // Get numeric value from field
         let field_num = match field_value {
             crate::context::FieldValue::Number(n) => *n,
-            crate::context::FieldValue::Boolean(b) => if *b { 1 } else { 0 },
+            crate::context::FieldValue::Boolean(b) => {
+                if *b {
+                    1
+                } else {
+                    0
+                }
+            }
             _ => return Err(EngineError::TypeMismatch(self.condition.field.clone())),
         };
-        
+
         let op = self.condition.operator_typed()?;
         let result = match op {
             Operator::Gt => field_num > self.condition.value,
@@ -79,10 +86,10 @@ impl Rule {
             Operator::Eq => field_num == self.condition.value,
             Operator::Ne => field_num != self.condition.value,
         };
-        
+
         Ok(result)
     }
-    
+
     /// Apply action
     pub fn apply_action(&self, _ctx: &EvaluationContext) -> ActionResult {
         match self.action.action_kind().unwrap_or(ActionKind::Log) {
@@ -96,18 +103,17 @@ impl Rule {
                 }
                 result
             }
-            ActionKind::Warn => {
-                ActionResult::warn(
-                    self.action.error_code.as_deref().unwrap_or("WARNING"),
-                    self.action.message.as_deref().unwrap_or("Warning"),
-                )
-            }
-            ActionKind::RequireApproval => {
-                ActionResult::approval_required(
-                    self.action.error_code.as_deref().unwrap_or("APPROVAL_REQUIRED"),
-                    self.action.timeout_minutes.unwrap_or(30),
-                )
-            }
+            ActionKind::Warn => ActionResult::warn(
+                self.action.error_code.as_deref().unwrap_or("WARNING"),
+                self.action.message.as_deref().unwrap_or("Warning"),
+            ),
+            ActionKind::RequireApproval => ActionResult::approval_required(
+                self.action
+                    .error_code
+                    .as_deref()
+                    .unwrap_or("APPROVAL_REQUIRED"),
+                self.action.timeout_minutes.unwrap_or(30),
+            ),
             ActionKind::Log => ActionResult::allow(),
         }
     }
@@ -145,13 +151,13 @@ impl RuleRegistry {
     /// Create new registry
     pub fn new() -> Self {
         let mut registry = RuleRegistry::empty();
-        
+
         // Load built-in rules from specification
         registry.load_builtin_rules();
-        
+
         registry
     }
-    
+
     /// Load built-in rules
     fn load_builtin_rules(&mut self) {
         // CRUE-001: Volume max
@@ -177,7 +183,7 @@ impl RuleRegistry {
             valid_until: None,
             enabled: true,
         });
-        
+
         // CRUE-002: Justification obligatoire
         self.add_rule(Rule {
             id: "CRUE_002".to_string(),
@@ -201,7 +207,7 @@ impl RuleRegistry {
             valid_until: None,
             enabled: true,
         });
-        
+
         // CRUE-003: Export interdit
         self.add_rule(Rule {
             id: "CRUE_003".to_string(),
@@ -225,7 +231,7 @@ impl RuleRegistry {
             valid_until: None,
             enabled: true,
         });
-        
+
         // CRUE-007: Temps requête max
         self.add_rule(Rule {
             id: "CRUE_007".to_string(),
@@ -250,7 +256,7 @@ impl RuleRegistry {
             enabled: true,
         });
     }
-    
+
     /// Add rule to registry
     pub fn add_rule(&mut self, rule: Rule) {
         let id = rule.id.clone();
@@ -258,17 +264,17 @@ impl RuleRegistry {
         self.rules.push(rule);
         self.by_id.insert(id, index);
     }
-    
+
     /// Get active rules
     pub fn get_active_rules(&self) -> Vec<&Rule> {
         self.rules.iter().filter(|r| r.is_valid_now()).collect()
     }
-    
+
     /// Get rule by ID
     pub fn get_rule(&self, id: &str) -> Option<&Rule> {
         self.by_id.get(id).and_then(|&i| self.rules.get(i))
     }
-    
+
     /// Get rule count
     pub fn len(&self) -> usize {
         self.rules.len()
@@ -284,13 +290,13 @@ impl Default for RuleRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_registry_loads_builtin() {
         let registry = RuleRegistry::new();
         assert!(registry.len() > 0);
     }
-    
+
     #[test]
     fn test_rule_evaluation() {
         let rule = Rule {
@@ -315,7 +321,7 @@ mod tests {
             valid_until: None,
             enabled: true,
         };
-        
+
         let ctx = EvaluationContext::from_request(&crate::EvaluationRequest {
             request_id: "test".to_string(),
             agent_id: "AGENT_001".to_string(),
@@ -335,7 +341,7 @@ mod tests {
             request_hour: 14,
             is_within_mission_hours: true,
         });
-        
+
         let result = rule.evaluate(&ctx).unwrap();
         assert!(result);
     }
