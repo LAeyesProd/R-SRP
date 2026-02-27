@@ -152,9 +152,6 @@ struct AppState {
     engine: CrueEngine,
     logging: immutable_logging::ImmutableLog,
     mission_schedule: mission_schedule::MissionScheduleStore,
-    entropy_health: Mutex<EntropyHealthState>,
-    entropy_health_enabled: bool,
-    entropy_fail_closed: bool,
     publication_service: Mutex<immutable_logging::publication::PublicationService>,
     metrics: ApiMetrics,
     audit_publications_dir: Option<PathBuf>,
@@ -256,36 +253,6 @@ fn is_production_environment() -> bool {
     .into_iter()
     .flatten()
     .any(|v| matches!(v.to_ascii_lowercase().as_str(), "prod" | "production"))
-}
-
-async fn refresh_entropy_health(state: &Arc<AppState>) {
-    let checked_at = chrono::Utc::now().to_rfc3339();
-    let result = crypto_core::entropy::entropy_health_check();
-    let mut entropy = state.entropy_health.lock().await;
-    entropy.last_checked_at = Some(checked_at);
-    match result {
-        Ok(report) => {
-            entropy.healthy = true;
-            entropy.last_error = None;
-            tracing::debug!(
-                source = report.source,
-                sample_size = report.sample_size,
-                "Entropy health check passed"
-            );
-        }
-        Err(err) => {
-            entropy.healthy = false;
-            entropy.last_error = Some(err.to_string());
-            tracing::error!(error = %err, "Entropy health check failed");
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct EntropyHealthState {
-    healthy: bool,
-    last_checked_at: Option<String>,
-    last_error: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -608,9 +575,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         engine,
         logging,
         mission_schedule,
-        entropy_health: Mutex::new(initial_entropy_health),
-        entropy_health_enabled,
-        entropy_fail_closed,
         publication_service: Mutex::new(immutable_logging::publication::PublicationService::new()),
         metrics: ApiMetrics::default(),
         audit_publications_dir,
@@ -640,7 +604,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rate_limit_backend = parse_rate_limit_backend()?;
     let rate_limiter = match rate_limit_backend {
         RateLimitBackend::InMemory => {
-            if production_env {
+            if is_production_environment() {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
                     "RATE_LIMIT_BACKEND=in-memory is forbidden in production; use RATE_LIMIT_BACKEND=external",
@@ -657,7 +621,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             None
         }
     };
-    if production_env && rate_limiter.is_none() {
+    if is_production_environment() && rate_limiter.is_none() {
         tracing::info!(
             "Production mode: in-process rate limiter disabled; external backend is required."
         );
@@ -706,7 +670,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ));
     }
 
-    let expose_public_health = !production_env || parse_bool_env("PUBLIC_HEALTH_ENDPOINTS", false);
+    let expose_public_health =
+        !is_production_environment() || parse_bool_env("PUBLIC_HEALTH_ENDPOINTS", false);
     let mut app = Router::new().nest("/api/v1", api_v1);
     if expose_public_health {
         app = app

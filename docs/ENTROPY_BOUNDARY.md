@@ -1,6 +1,6 @@
 # R-SRP Entropy Boundary
 
-Version: 0.9.9  
+Version: 0.9.8  
 Date: 2026-02-27  
 Owner: Security Engineering
 
@@ -39,14 +39,6 @@ Out of entropy boundary:
   - HSM-backed or equivalent approved signing custody for long-lived keys,
   - documented secret provenance for any deterministic derivation inputs.
 - Any entropy degradation event must be logged and treated as security-significant.
-- Runtime entropy controls (api-service):
-  - `ENTROPY_HEALTHCHECK_ENABLED` (default: `true`)
-  - `ENTROPY_FAIL_CLOSED` (default: `true` in production)
-  - `ENTROPY_HEALTHCHECK_INTERVAL_SECONDS` (default: `60`)
-- Production fail-closed policy:
-  - startup fails if entropy self-test fails and `ENTROPY_FAIL_CLOSED=true`,
-  - startup fails if `ENTROPY_HEALTHCHECK_ENABLED=false` in production,
-  - `/ready` reports not-ready when entropy is unhealthy and fail-closed is enabled.
 
 ## 5. Evidence Requirements
 
@@ -54,10 +46,8 @@ Mandatory evidence for release/certification package:
 - `cargo clippy --workspace --all-targets --locked -- -D warnings`
 - `cargo check --workspace --locked`
 - `cargo test -p rsrp-security-core --locked` (FIPS/zeroization relevant tests)
-- `cargo test -p rsrp-security-core --locked entropy::tests::test_entropy_health_check_reports_ok -- --nocapture`
 - `cargo build -p rsrp-pqcrypto --release --locked --no-default-features --features production`
 - startup logs proving production reject behavior for disallowed runtime profiles.
-- readiness logs/metrics proving runtime entropy monitoring is active.
 
 ## 6. Audit Notes
 
@@ -66,3 +56,4 @@ This boundary must be reviewed whenever:
 - production feature policy changes,
 - key custody model changes (software signer/HSM/KMS),
 - deployment architecture changes (container, VM, hostile-host assumptions).
+
