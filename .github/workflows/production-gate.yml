@@ -12,6 +12,7 @@ env:
   CARGO_INCREMENTAL: "0"
   CARGO_BUILD_PIPELINING: "false"
   CARGO_BUILD_JOBS: "1"
+  CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
 
 jobs:
   production-profile:
@@ -42,6 +43,24 @@ jobs:
           test -f /usr/lib/llvm-14/lib/libclang.so
           echo "LIBCLANG_PATH=/usr/lib/llvm-14/lib" >> "$GITHUB_ENV"
 
+      - name: Isolate cargo directories for deterministic build
+        run: |
+          set -euo pipefail
+          echo "CARGO_HOME=${RUNNER_TEMP}/cargo-home" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_DIR=${RUNNER_TEMP}/cargo-target" >> "$GITHUB_ENV"
+          mkdir -p "${RUNNER_TEMP}/cargo-home" "${RUNNER_TEMP}/cargo-target"
+
+      - name: Normalize rust environment
+        run: |
+          set -euo pipefail
+          unset RUSTFLAGS || true
+          unset CARGO_ENCODED_RUSTFLAGS || true
+          unset CARGO_BUILD_TARGET || true
+          unset RUSTC_WRAPPER || true
+          unset RUSTC_WORKSPACE_WRAPPER || true
+          rustup show
+          cargo --version
+
       - name: Lockfile sync check
         run: cargo fetch --locked
 
@@ -49,12 +68,6 @@ jobs:
         run: |
           set -euo pipefail
           cargo clean
-          cargo fetch --locked
-
-      - name: Reset cargo registry cache
-        run: |
-          set -euo pipefail
-          rm -rf ~/.cargo/registry/cache ~/.cargo/registry/src ~/.cargo/registry/index
           cargo fetch --locked
 
       - name: Enforce zero-warning policy (clippy)
