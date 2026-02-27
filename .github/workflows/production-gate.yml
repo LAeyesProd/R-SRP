@@ -25,7 +25,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.85.1
 
       - name: Install OQS toolchain (bindgen/cmake)
         run: |
@@ -43,6 +43,12 @@ jobs:
       - name: Lockfile sync check
         run: cargo fetch --locked
 
+      - name: Sanitize cargo build state
+        run: |
+          set -euo pipefail
+          cargo clean
+          cargo fetch --locked
+
       - name: Ensure no mock backend in production feature graph
         run: |
           set -euo pipefail
@@ -59,6 +65,7 @@ jobs:
             --manifest-path rsrp-demo/Cargo.toml \
             --release \
             --locked \
+            -j 1 \
             --no-default-features \
             --features production
 
@@ -68,6 +75,7 @@ jobs:
           cargo test \
             -p rsrp-pqcrypto \
             --locked \
+            -j 1 \
             --no-default-features \
             --features production \
             --tests
@@ -83,7 +91,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.85.1
 
       - name: Install jq
         run: |
