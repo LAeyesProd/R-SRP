@@ -73,7 +73,7 @@ impl Parser {
 
             // Comments
             if c == '/' && chars.peek() == Some(&'/') {
-                while let Some(c) = chars.next() {
+                for c in chars.by_ref() {
                     if c == '\n' {
                         break;
                     }

@@ -1,16 +1,9 @@
-//! Signature primitives - Ed25519, RSA-PSS, ECDSA
+//! Signature primitives - Ed25519 (RSA-PSS legacy path disabled)
 
 use crate::{CryptoError, KeyMetadata, Result, SignatureAlgorithm};
-use ed25519_dalek::{Signature as Ed25519Signature, Signer, SigningKey, VerifyingKey};
+use ed25519_dalek::{Signature as Ed25519Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use hkdf::Hkdf;
 use rand::{rngs::OsRng, rngs::StdRng, SeedableRng};
-use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey};
-use rsa::pss::{
-    Signature as RsaPssSignature, SigningKey as RsaPssSigningKey,
-    VerifyingKey as RsaPssVerifyingKey,
-};
-use rsa::{RsaPrivateKey, RsaPublicKey};
-use signature::{RandomizedSigner, SignatureEncoding, Verifier as SignatureVerifier};
 use thiserror::Error;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -207,7 +200,7 @@ impl Ed25519KeyPair {
     }
 }
 
-/// RSA key pair (placeholder - full implementation would use rsa crate)
+/// Legacy RSA key pair support (disabled).
 #[allow(dead_code)]
 pub struct RsaKeyPair {
     key_id: String,
@@ -225,32 +218,10 @@ impl RsaKeyPair {
     /// Generate RSA-PSS key pair with explicit key size.
     #[allow(dead_code)]
     pub fn generate_with_bits(bits: usize) -> Result<Self> {
-        if bits < 2048 {
-            return Err(CryptoError::KeyError(
-                "RSA key size must be >= 2048 bits".to_string(),
-            ));
-        }
-        let mut rng = OsRng;
-        let private = RsaPrivateKey::new(&mut rng, bits)
-            .map_err(|e| CryptoError::KeyError(format!("RSA key generation failed: {e}")))?;
-        let public = RsaPublicKey::from(&private);
-        let private_key = private
-            .to_pkcs8_der()
-            .map_err(|e| {
-                CryptoError::KeyError(format!("RSA private key DER encoding failed: {e}"))
-            })?
-            .as_bytes()
-            .to_vec();
-        let public_key = public
-            .to_public_key_der()
-            .map_err(|e| CryptoError::KeyError(format!("RSA public key DER encoding failed: {e}")))?
-            .as_bytes()
-            .to_vec();
-        Ok(RsaKeyPair {
-            key_id: format!("rsa-pss-{bits}-{}", uuid::Uuid::new_v4()),
-            public_key,
-            private_key,
-        })
+        let _ = bits;
+        Err(CryptoError::SignatureError(
+            "RSA-PSS support disabled in rsrp-security-core (legacy path removed)".to_string(),
+        ))
     }
 
     /// Get key ID
@@ -316,25 +287,19 @@ pub fn verify(
 /// Sign with RSA-PSS-SHA256 using PKCS#8 DER private key bytes.
 #[allow(dead_code)]
 pub fn sign_rsa_pss(data: &[u8], private_key: &[u8]) -> Result<Vec<u8>> {
-    let private = RsaPrivateKey::from_pkcs8_der(private_key).map_err(|_| {
-        CryptoError::KeyError("Invalid RSA private key (expected PKCS#8 DER)".to_string())
-    })?;
-    let signer = RsaPssSigningKey::<sha2::Sha256>::new(private);
-    let mut rng = OsRng;
-    let sig = signer.sign_with_rng(&mut rng, data);
-    Ok(sig.to_vec())
+    let _ = (data, private_key);
+    Err(CryptoError::SignatureError(
+        "RSA-PSS support disabled in rsrp-security-core (legacy path removed)".to_string(),
+    ))
 }
 
 /// Verify RSA-PSS-SHA256 using SubjectPublicKeyInfo DER public key bytes.
 #[allow(dead_code)]
 pub fn verify_rsa_pss(data: &[u8], signature: &[u8], public_key: &[u8]) -> Result<bool> {
-    let public = RsaPublicKey::from_public_key_der(public_key).map_err(|_| {
-        CryptoError::KeyError("Invalid RSA public key (expected SPKI DER)".to_string())
-    })?;
-    let verifier = RsaPssVerifyingKey::<sha2::Sha256>::new(public);
-    let sig = RsaPssSignature::try_from(signature)
-        .map_err(|_| CryptoError::SignatureError("Invalid RSA-PSS signature bytes".to_string()))?;
-    Ok(verifier.verify(data, &sig).is_ok())
+    let _ = (data, signature, public_key);
+    Err(CryptoError::SignatureError(
+        "RSA-PSS support disabled in rsrp-security-core (legacy path removed)".to_string(),
+    ))
 }
 
 #[cfg(test)]
@@ -379,11 +344,11 @@ mod tests {
     }
 
     #[test]
-    fn test_rsa_pss_sign_verify_roundtrip() {
-        let keypair = RsaKeyPair::generate_with_bits(2048).unwrap();
+    fn test_rsa_pss_disabled_by_default() {
         let msg = b"rsa-pss-message";
-        let sig = sign_rsa_pss(msg, keypair.private_key_der()).unwrap();
-        assert!(verify_rsa_pss(msg, &sig, keypair.public_key_der()).unwrap());
-        assert!(!verify_rsa_pss(b"tampered", &sig, keypair.public_key_der()).unwrap());
+        let err = sign_rsa_pss(msg, b"not-a-real-key")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("disabled"));
     }
 }

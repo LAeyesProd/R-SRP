@@ -35,3 +35,10 @@ This project contains cryptographic and verification components. Please prioriti
 - deterministic serialization ambiguity,
 - ledger immutability/integrity bypass,
 - secret exposure in API or memory handling.
+
+## Security Artifacts
+
+- Formal STRIDE threat model: `docs/THREAT_MODEL_STRIDE.md`
+- Pre-audit technical status: `docs/PRE_AUDIT_AUTOMATIQUE_2026-02-27.md`
+- Security hardening notes: `docs/SECURITY_HARDENING_v0.9.4.md`
+- Signed SBOM workflow: `.github/workflows/sbom.yml`

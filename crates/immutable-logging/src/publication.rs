@@ -145,6 +145,12 @@ pub struct PublicationService {
     previous_day_root: Option<String>,
 }
 
+impl Default for PublicationService {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PublicationService {
     /// Create new publication service
     pub fn new() -> Self {
@@ -540,7 +546,7 @@ fn base64_encode(data: &[u8]) -> String {
 }
 
 fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return Err("Invalid hex length".to_string());
     }
     (0..s.len())

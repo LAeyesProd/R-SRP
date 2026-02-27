@@ -279,6 +279,11 @@ impl RuleRegistry {
     pub fn len(&self) -> usize {
         self.rules.len()
     }
+
+    /// Whether the registry contains no rules.
+    pub fn is_empty(&self) -> bool {
+        self.rules.is_empty()
+    }
 }
 
 impl Default for RuleRegistry {
@@ -294,7 +299,7 @@ mod tests {
     #[test]
     fn test_registry_loads_builtin() {
         let registry = RuleRegistry::new();
-        assert!(registry.len() > 0);
+        assert!(!registry.is_empty());
     }
 
     #[test]

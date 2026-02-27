@@ -45,7 +45,7 @@ struct AuditPublicationSignature {
 
 enum AuditPublicationSigner {
     SoftwareEd25519 {
-        key_pair: crypto_core::signature::Ed25519KeyPair,
+        key_pair: Box<crypto_core::signature::Ed25519KeyPair>,
         key_id: String,
         public_key_hex: String,
     },
@@ -335,7 +335,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map(|b| format!("{:02x}", b))
                 .collect::<String>();
             Some(Mutex::new(AuditPublicationSigner::SoftwareEd25519 {
-                key_pair,
+                key_pair: Box::new(key_pair),
                 key_id,
                 public_key_hex,
             }))
@@ -388,7 +388,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .map(|b| format!("{:02x}", b))
                     .collect::<String>();
                 Some(Mutex::new(AuditPublicationSigner::SoftwareEd25519 {
-                    key_pair,
+                    key_pair: Box::new(key_pair),
                     key_id,
                     public_key_hex,
                 }))

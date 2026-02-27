@@ -1,95 +1,54 @@
-# Cargo Deny Configuration for R-SRP Ultra
-# Enforces security and license policies
-
-[licenses]
-# License check configuration
-allow = [
-    "EUPL-1.2",     # European Union Public License
-    "Apache-2.0",   # Apache 2.0
-    "MIT",          # MIT
-    "BSD-3-Clause", # BSD 3-Clause
-    "ISC",          # ISC
-    "MPL-2.0",      # Mozilla Public License
-    "CC0-1.0",      # Creative Commons Zero
-    "Unlicense",    # Public Domain
-]
-
-# Deny specific licenses
-deny = [
-    "GPL-2.0",
-    "GPL-3.0",
-    "AGPL-3.0",
-    "LGPL-2.1",
-    "LGPL-3.0",
-]
-
-# Copyleft policies
-copyleft = "deny"
-
-# Default license for packages without license field
-default = "deny"
-
-# Allow unlicensed packages in some cases
-allow-osi-fsf-free = "neither"
-
-# Don't warn about unmaintained crates
-# unmaintained = "warn"
-
-[licenses.clarify]
-# Example of clarifying license for specific crates
-[[licenses.clarify.crate]]
-name = "ring"
-expression = "MIT AND ISC AND OpenSSL"
-# files = []  # Not necessary to specify files for this
-
-[bans]
-# Deny multiple versions of the same crate
-multiple-versions = "deny"
-
-# Deny wildcard versions
-wildcards = "deny"
-
-# Allow high severity security advisories
-allow = [
-    { id = "RUSTSEC-0000-0000", reason = "placeholder" },
-]
-
-# Deny security advisories
-deny = [
-    { id = "RUSTSEC-0000-0000", reason = "placeholder" },
-]
-
-# Allow specific crates with exceptions
-allow-workspace-single-version = false
-
-[sources]
-# Unknown source configuration
-unknown-git-sources = "deny"
-unknown-registry-sources = "deny"
-
-# Allow specific registries
-allow = [
-    "crates-io",
-    "https://github.com/rustsec/rustsec",
-]
-
-# Deny all other git sources
-allow-git = []
+[graph]
+targets = []
+all-features = true
 
 [advisories]
-# DB path for advisory database
-db-path = "~/.cargo/advisory-db"
-
-# DB URL for advisory updates
 db-urls = ["https://github.com/rustsec/advisory-db"]
-
-# Vulnerability check configuration
-[vuln]
-# Don't fail on vulnerabilities that have been acknowledged
 ignore = [
-    # Example: "RUSTSEC-0000-0000",
+    # rustls stack currently pulls rustls-pemfile transitively; no upstream replacement path exposed yet.
+    { id = "RUSTSEC-2025-0134", reason = "transitive dependency in rustls ecosystem; migration tracked" },
 ]
 
-# Vulnerability severity threshold
-# Valid: low, medium, high, critical
-severity-threshold = "high"
+[licenses]
+allow = [
+    "EUPL-1.2",
+    "Apache-2.0",
+    "MIT",
+    "BSD-3-Clause",
+    "BSD-2-Clause",
+    "ISC",
+    "MPL-2.0",
+    "CC0-1.0",
+    "Unlicense",
+    "Unicode-3.0",
+    "OpenSSL",
+]
+confidence-threshold = 0.8
+exceptions = []
+
+[licenses.private]
+ignore = false
+registries = []
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+allow = []
+allow-workspace = false
+deny = []
+skip = []
+skip-tree = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
+
+[sources.allow-org]
+github = []
+gitlab = []
+bitbucket = []

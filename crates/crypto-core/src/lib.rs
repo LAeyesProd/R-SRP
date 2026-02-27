@@ -12,10 +12,11 @@ pub mod signature;
 use serde::{Deserialize, Serialize};
 
 /// Hash algorithm selection
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum HashAlgorithm {
     /// SHA-256 (default)
+    #[default]
     Sha256,
     /// SHA-512
     Sha512,
@@ -23,32 +24,21 @@ pub enum HashAlgorithm {
     Blake3,
 }
 
-impl Default for HashAlgorithm {
-    fn default() -> Self {
-        HashAlgorithm::Sha256
-    }
-}
-
 /// Signature algorithm selection
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum SignatureAlgorithm {
-    /// RSA-PSS 2048
+    /// RSA-PSS 2048 (legacy; disabled in software signer path)
     RsaPss2048,
-    /// RSA-PSS 4096
+    /// RSA-PSS 4096 (legacy; disabled in software signer path)
     RsaPss4096,
     /// Ed25519
+    #[default]
     Ed25519,
     /// ECDSA P-256
     EcdsaP256,
     /// ECDSA P-384
     EcdsaP384,
-}
-
-impl Default for SignatureAlgorithm {
-    fn default() -> Self {
-        SignatureAlgorithm::Ed25519
-    }
 }
 
 /// Key metadata

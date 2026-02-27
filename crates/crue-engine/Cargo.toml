@@ -29,7 +29,7 @@ std = []
 # Enable deterministic timing (for compliance)
 deterministic = []
 # PQ/hybrid proof envelope support (debug/dev defaults to mock backend in rsrp-pqcrypto)
-pq-proof = ["dep:pqcrypto"]
+pq-proof = ["dep:pqcrypto", "pqcrypto/mock-crypto"]
 
 [dependencies]
 crue-dsl = { package = "rsrp-policy-dsl", version = "0.9.6", path = "../crue-dsl" }

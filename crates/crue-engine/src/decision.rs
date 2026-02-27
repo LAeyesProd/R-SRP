@@ -3,10 +3,11 @@
 use serde::{Deserialize, Serialize};
 
 /// Access decision
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum Decision {
     /// Allow access
+    #[default]
     Allow,
     /// Block access
     Block,
@@ -14,12 +15,6 @@ pub enum Decision {
     Warn,
     /// Require approval
     ApprovalRequired,
-}
-
-impl Default for Decision {
-    fn default() -> Self {
-        Decision::Allow
-    }
 }
 
 impl std::fmt::Display for Decision {

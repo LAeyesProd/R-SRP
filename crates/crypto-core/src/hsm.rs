@@ -20,10 +20,11 @@ pub struct HsmConfig {
 }
 
 /// HSM type
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum HsmType {
     /// Thales Luna HSM
+    #[default]
     ThalesLuna,
     /// Utimaco HSM
     Utimaco,
@@ -33,12 +34,6 @@ pub enum HsmType {
     AzureKeyVault,
     /// Software simulation (testing)
     SoftHSM,
-}
-
-impl Default for HsmType {
-    fn default() -> Self {
-        HsmType::ThalesLuna
-    }
 }
 
 /// HSM key handle

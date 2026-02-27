@@ -114,7 +114,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let engine_proof_v1 = engine_proof_v1_bytes.is_some();
     let (engine_proof_v1_size, engine_proof_v1_hash) = if let Some(bytes) = &engine_proof_v1_bytes {
-        let digest = crypto_core::hash::sha256(&bytes);
+        let digest = crypto_core::hash::sha256(bytes);
         (bytes.len(), crypto_core::hash::hex_encode(&digest))
     } else {
         (0usize, String::from("-"))
