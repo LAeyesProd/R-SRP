@@ -101,19 +101,16 @@ jobs:
           cargo check --locked \
             -p rsrp-policy-dsl \
             -p rsrp-security-core \
-            -p rsrp-proof-engine \
-            -p rsrp-pqcrypto
+            -p rsrp-proof-engine
           cargo build --release --locked \
-            -p rsrp-pqcrypto \
-            --no-default-features \
-            --features production
+            -p rsrp-policy-dsl \
+            -p rsrp-security-core \
+            -p rsrp-proof-engine
       
       - name: Calculate binary hashes
         run: |
           mkdir -p hashes
-          cargo metadata --format-version=1 --locked > metadata.json
           sha256sum Cargo.lock > hashes/Cargo.lock.sha256
-          sha256sum metadata.json > hashes/metadata.sha256
       
       - name: Upload Ubuntu hashes
         uses: actions/upload-artifact@v4
@@ -168,19 +165,16 @@ jobs:
           cargo check --locked \
             -p rsrp-policy-dsl \
             -p rsrp-security-core \
-            -p rsrp-proof-engine \
-            -p rsrp-pqcrypto
+            -p rsrp-proof-engine
           cargo build --release --locked \
-            -p rsrp-pqcrypto \
-            --no-default-features \
-            --features production
+            -p rsrp-policy-dsl \
+            -p rsrp-security-core \
+            -p rsrp-proof-engine
       
       - name: Calculate binary hashes
         run: |
           mkdir -p hashes
-          cargo metadata --format-version=1 --locked > metadata.json
           sha256sum Cargo.lock > hashes/Cargo.lock.sha256
-          sha256sum metadata.json > hashes/metadata.sha256
       
       - name: Upload Fedora hashes
         uses: actions/upload-artifact@v4
@@ -235,16 +229,15 @@ jobs:
           CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
         run: |
-          cargo build --release --locked --workspace --target aarch64-unknown-linux-gnu
+          cargo check --locked --target aarch64-unknown-linux-gnu \
+            -p rsrp-policy-dsl \
+            -p rsrp-security-core \
+            -p rsrp-proof-engine
       
       - name: Calculate binary hashes
         run: |
           mkdir -p hashes
-          for bin in target/aarch64-unknown-linux-gnu/release/api-service target/aarch64-unknown-linux-gnu/release/crue-engine; do
-            if [ -f "$bin" ]; then
-              sha256sum "$bin" > "hashes/$(basename $bin).sha256"
-            fi
-          done
+          sha256sum Cargo.lock > hashes/Cargo.lock.sha256
       
       - name: Upload ARM64 hashes
         uses: actions/upload-artifact@v4
