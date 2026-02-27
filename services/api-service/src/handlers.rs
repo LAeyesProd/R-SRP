@@ -7,6 +7,7 @@ use axum::{
 };
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use chrono::Timelike;
+use std::net::SocketAddr;
 use std::path::Path as FsPath;
 use std::sync::Arc;
 
@@ -52,6 +53,8 @@ pub async fn ready_check(State(state): State<Arc<AppState>>) -> Json<ReadyRespon
 pub async fn validate_access(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ValidateParams>,
+    headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
 ) -> Result<Json<ValidationResponse>, ApiError> {
     tracing::debug!("Validating access for agent: {}", params.agent_id);
 
@@ -94,6 +97,8 @@ pub async fn validate_access(
 /// Validate access (POST)
 pub async fn validate_access_post(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
     Json(payload): Json<ValidationRequest>,
 ) -> Result<Json<ValidationResponse>, ApiError> {
     tracing::debug!("Validating access for agent: {}", payload.agent_id);
@@ -599,8 +604,10 @@ async fn record_validation_decision_audit(
     state: &Arc<AppState>,
     request: &crue_engine::EvaluationRequest,
     result: &crue_engine::EvaluationResult,
+    ip_address: Option<String>,
+    user_agent: Option<String>,
 ) {
-    let entry = match build_audit_log_entry(request, result) {
+    let entry = match build_audit_log_entry(request, result, ip_address, user_agent) {
         Ok(e) => e,
         Err(err) => {
             tracing::warn!(
@@ -623,6 +630,8 @@ async fn record_validation_decision_audit(
 fn build_audit_log_entry(
     request: &crue_engine::EvaluationRequest,
     result: &crue_engine::EvaluationResult,
+    ip_address: Option<String>,
+    user_agent: Option<String>,
 ) -> Result<LogEntry, immutable_logging::error::LogError> {
     let event_type = match result.decision {
         crue_engine::decision::Decision::Allow => {
@@ -666,6 +675,23 @@ fn build_audit_log_entry(
     }
 
     builder.build()
+}
+
+fn request_ip_from_headers(
+    headers: &HeaderMap,
+    connect_info: Option<&ConnectInfo<SocketAddr>>,
+) -> Option<String> {
+    if let Some(value) = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|raw| raw.split(',').next())
+        .map(str::trim)
+        .filter(|ip| !ip.is_empty())
+    {
+        return Some(value.to_string());
+    }
+
+    connect_info.map(|ci| ci.0.ip().to_string())
 }
 
 #[cfg(test)]
@@ -748,10 +774,33 @@ mod tests {
             evaluation_time_ms: 1,
         };
 
-        let entry = build_audit_log_entry(&request, &result).unwrap();
+        let entry = build_audit_log_entry(
+            &request,
+            &result,
+            Some("203.0.113.10".to_string()),
+            Some("rsrp-test".to_string()),
+        )
+        .unwrap();
         assert_eq!(entry.event_type(), EventType::RuleViolation);
         assert_eq!(entry.decision(), AuditDecision::Block);
         assert_eq!(entry.rule_id(), Some("CRUE_001"));
+        let entry_json = serde_json::to_value(&entry).expect("serialize entry");
+        assert_eq!(
+            entry_json["request"]["ip_address"].as_str(),
+            Some("203.0.113.10")
+        );
+        assert_eq!(
+            entry_json["request"]["user_agent"].as_str(),
+            Some("rsrp-test")
+        );
+    }
+
+    #[test]
+    fn test_request_ip_from_headers_prefers_forwarded_for() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "198.51.100.7, 10.0.0.1".parse().unwrap());
+        let ip = request_ip_from_headers(&headers, None);
+        assert_eq!(ip.as_deref(), Some("198.51.100.7"));
     }
 
     #[test]
