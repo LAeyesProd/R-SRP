@@ -51,6 +51,12 @@ jobs:
           cargo clean
           cargo fetch --locked
 
+      - name: Reset cargo registry cache
+        run: |
+          set -euo pipefail
+          rm -rf ~/.cargo/registry/cache ~/.cargo/registry/src ~/.cargo/registry/index
+          cargo fetch --locked
+
       - name: Enforce zero-warning policy (clippy)
         run: |
           set -euo pipefail
