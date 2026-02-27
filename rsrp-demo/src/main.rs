@@ -139,7 +139,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let proof = log
         .get_chain_proof(appended.entry_id())
         .await
-        .ok_or_else(|| std::io::Error::other("proof missing"))?;
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "proof missing"))?;
     let proof_ok = verify_chain_proof(&proof);
     let chain_ok = log.verify().await?;
 

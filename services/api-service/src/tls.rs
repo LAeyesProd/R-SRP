@@ -4,7 +4,7 @@
 //! communication, aligned with SPIFFE-style certificate validation patterns.
 
 use rustls::{
-    pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer},
+    pki_types::{CertificateDer, PrivateKeyDer},
     server::WebPkiClientVerifier,
     version::TLS13,
     ClientConfig, RootCertStore, ServerConfig,
@@ -131,6 +131,7 @@ fn parse_private_key(bytes: &[u8]) -> Result<PrivateKeyDer<'static>, TlsError> {
             return Ok(key);
         }
     }
+
     PrivateKeyDer::try_from(bytes.to_vec()).map_err(|e| TlsError::CertificateParse(e.to_string()))
 }
 

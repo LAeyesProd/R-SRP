@@ -295,7 +295,7 @@ impl PublicationService {
         };
 
         // Make request to TSA (in production, use actual TSA server)
-        let response = self.request_timestamp(tsa_url, &timestamp_request).await?;
+        let response = self.request_timestamp(&tsa_url, &timestamp_request).await?;
 
         publication.tsa_timestamp = Some(TsaTimestamp {
             tsa_url: tsa_url.to_string(),

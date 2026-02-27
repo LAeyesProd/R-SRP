@@ -1,6 +1,6 @@
 //! Crypto Core - Cryptographic Primitives for R-SRP Ultra
 //!
-//! Provides SHA-256/SHA-512, BLAKE3, and Ed25519 implementations
+//! Provides SHA-256/SHA-512, BLAKE3, Ed25519, and RSA-PSS implementations
 //! with HSM integration support.
 
 pub mod error;
