@@ -4,6 +4,9 @@ use crate::hash::hash;
 use crate::{CryptoError, HashAlgorithm, Result};
 use serde::{Deserialize, Serialize};
 
+const MERKLE_LEAF_PREFIX: u8 = 0x00;
+const MERKLE_NODE_PREFIX: u8 = 0x01;
+
 /// Merkle tree node
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MerkleNode {
@@ -49,8 +52,7 @@ impl MerkleTree {
 
     /// Add a leaf
     pub fn add_leaf(&mut self, data: Vec<u8>) {
-        // Hash the leaf data
-        let leaf_hash = hash(&data, self.algorithm).unwrap_or_default();
+        let leaf_hash = self.hash_leaf(&data);
         self.leaves.push(leaf_hash);
     }
 
@@ -84,10 +86,7 @@ impl MerkleTree {
         let mid = nodes.len().div_ceil(2);
         let left = self.build_tree(&nodes[..mid]);
         let right = self.build_tree(&nodes[mid..]);
-
-        // Concatenate and hash
-        let combined: Vec<u8> = left.iter().chain(right.iter()).cloned().collect();
-        hash(&combined, self.algorithm).unwrap_or_else(|_| vec![0u8; 32])
+        self.hash_node(&left, &right)
     }
 
     /// Generate proof for a leaf
@@ -130,6 +129,21 @@ impl MerkleTree {
             });
         }
     }
+
+    fn hash_leaf(&self, data: &[u8]) -> Vec<u8> {
+        let mut payload = Vec::with_capacity(1 + data.len());
+        payload.push(MERKLE_LEAF_PREFIX);
+        payload.extend_from_slice(data);
+        hash(&payload, self.algorithm).unwrap_or_default()
+    }
+
+    fn hash_node(&self, left: &[u8], right: &[u8]) -> Vec<u8> {
+        let mut payload = Vec::with_capacity(1 + left.len() + right.len());
+        payload.push(MERKLE_NODE_PREFIX);
+        payload.extend_from_slice(left);
+        payload.extend_from_slice(right);
+        hash(&payload, self.algorithm).unwrap_or_else(|_| vec![0u8; 32])
+    }
 }
 
 /// Proof step in Merkle verification
@@ -154,13 +168,17 @@ pub fn verify_proof(proof: &MerkleProof, root_hash: &str, algorithm: HashAlgorit
     for step in &proof.path {
         let sibling = hex_decode(&step.hash).unwrap_or_default();
 
-        let combined: Vec<u8> = if step.side == "left" {
-            sibling.iter().chain(current_hash.iter()).cloned().collect()
+        let mut payload = Vec::with_capacity(1 + sibling.len() + current_hash.len());
+        payload.push(MERKLE_NODE_PREFIX);
+        if step.side == "left" {
+            payload.extend_from_slice(&sibling);
+            payload.extend_from_slice(&current_hash);
         } else {
-            current_hash.iter().chain(sibling.iter()).cloned().collect()
-        };
+            payload.extend_from_slice(&current_hash);
+            payload.extend_from_slice(&sibling);
+        }
 
-        current_hash = hash(&combined, algorithm).unwrap_or_default();
+        current_hash = hash(&payload, algorithm).unwrap_or_default();
     }
 
     hex_encode(&current_hash) == root_hash
@@ -216,5 +234,18 @@ mod tests {
         let proof = tree.generate_proof(0).unwrap();
 
         assert!(verify_proof(&proof, &root.root_hash, HashAlgorithm::Blake3));
+    }
+
+    #[test]
+    fn test_merkle_domain_separation_leaf_vs_node() {
+        let tree = MerkleTree::new(HashAlgorithm::Sha256);
+        let left = vec![0xAA; 32];
+        let right = vec![0xBB; 32];
+        let mut combined = left.clone();
+        combined.extend_from_slice(&right);
+
+        let leaf_hash = tree.hash_leaf(&combined);
+        let node_hash = tree.hash_node(&left, &right);
+        assert_ne!(leaf_hash, node_hash);
     }
 }

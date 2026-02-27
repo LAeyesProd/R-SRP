@@ -56,3 +56,13 @@ For application crates (example `rsrp-demo`):
   - cryptographic policy freezing
   - runtime hardening
   - secure defaults
+
+## 6. Mandatory Companion Documents
+
+To avoid documentation/code divergence, this document is normative together with:
+- `docs/TRACEABILITY_MATRIX.md`
+- `docs/ENTROPY_BOUNDARY.md`
+- `docs/ASSUMPTIONS_REGISTER.md`
+- `docs/KEY_LIFECYCLE_POLICY.md`
+
+Any security-relevant code change affecting crypto behavior must update this set in the same PR.
