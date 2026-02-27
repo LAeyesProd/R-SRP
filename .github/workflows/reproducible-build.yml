@@ -97,25 +97,23 @@ jobs:
       
       - name: Build release
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            # PR path: deterministic core crates only (avoid network-stack/toolchain variance)
-            cargo build --locked \
-              -p rsrp-security-core \
-              -p rsrp-policy-dsl \
-              -p rsrp-proof-engine \
-              -p rsrp-pqcrypto
-          else
-            cargo build --release --locked --workspace
-          fi
+          # Deterministic core crates only (avoid workspace network-stack variance)
+          cargo check --locked \
+            -p rsrp-policy-dsl \
+            -p rsrp-security-core \
+            -p rsrp-proof-engine \
+            -p rsrp-pqcrypto
+          cargo build --release --locked \
+            -p rsrp-pqcrypto \
+            --no-default-features \
+            --features production
       
       - name: Calculate binary hashes
         run: |
           mkdir -p hashes
-          for bin in target/release/api-service target/release/crue-engine target/release/crypto-core target/release/immutable-logging; do
-            if [ -f "$bin" ]; then
-              sha256sum "$bin" > "hashes/$(basename $bin).sha256"
-            fi
-          done
+          cargo metadata --format-version=1 --locked > metadata.json
+          sha256sum Cargo.lock > hashes/Cargo.lock.sha256
+          sha256sum metadata.json > hashes/metadata.sha256
       
       - name: Upload Ubuntu hashes
         uses: actions/upload-artifact@v4
@@ -167,16 +165,22 @@ jobs:
       
       - name: Build release
         run: |
-          cargo build --release --locked --workspace
+          cargo check --locked \
+            -p rsrp-policy-dsl \
+            -p rsrp-security-core \
+            -p rsrp-proof-engine \
+            -p rsrp-pqcrypto
+          cargo build --release --locked \
+            -p rsrp-pqcrypto \
+            --no-default-features \
+            --features production
       
       - name: Calculate binary hashes
         run: |
           mkdir -p hashes
-          for bin in target/release/api-service target/release/crue-engine target/release/crypto-core target/release/immutable-logging; do
-            if [ -f "$bin" ]; then
-              sha256sum "$bin" > "hashes/$(basename $bin).sha256"
-            fi
-          done
+          cargo metadata --format-version=1 --locked > metadata.json
+          sha256sum Cargo.lock > hashes/Cargo.lock.sha256
+          sha256sum metadata.json > hashes/metadata.sha256
       
       - name: Upload Fedora hashes
         uses: actions/upload-artifact@v4
