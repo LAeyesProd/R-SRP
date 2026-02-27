@@ -22,12 +22,21 @@ This policy applies to:
 - Private keys are never persisted in plaintext.
 - Memory containing secrets must be zeroized after use.
 - Long-lived keys must be stored in HSM/KMS where available.
+- Current open-source TOE status:
+  - `SoftHSM` is available for tests/non-production only.
+  - Hardware HSM backends are declared in interfaces but not implemented in this TOE build.
+  - Production deployments must use an external, approved signer custody process (HSM/KMS or equivalent) outside this crate.
 
 ## 4. Rotation
 
 - Standard rotation interval: 12 months maximum.
 - Emergency rotation must complete within 24h after compromise suspicion.
 - Rotation requires dual-control approval and ticket traceability.
+- JWT signing key rotation requirements:
+  - maintain active + previous key sets for overlap window,
+  - reject unknown `kid`,
+  - keep revocation log for removed key IDs,
+  - document max JWT key lifetime and rollover evidence per release.
 
 ## 5. Revocation
 
@@ -65,6 +74,7 @@ The following evidence is required for external audit review:
   - zeroization checks,
   - production profile gating and runtime fail-closed checks.
 - Operationally required outside crate code:
+  - hardware HSM/KMS signer integration,
   - key ceremony records,
   - revocation workflow execution proof,
   - destruction attestations from HSM/KMS or approved operator process.

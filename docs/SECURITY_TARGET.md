@@ -31,6 +31,7 @@ Out of boundary:
 - External HSM/KMS hardware implementation details
 - External TSA trust anchors
 - Host OS hardening outside project guidance
+- SPIFFE/SVID-specific identity verification (TOE currently enforces mTLS X.509 validation, not SPIFFE URI-SAN policy enforcement)
 
 ## 3. Assets
 
@@ -81,6 +82,9 @@ Implementation and controls:
 - `docs/THREAT_MODEL.md`
 - `docs/THREAT_MODEL_STRIDE.md`
 - `docs/KEY_LIFECYCLE_POLICY.md`
+- `docs/HSM_IMPLEMENTATION_STATUS.md`
+- `docs/NETWORK_IDENTITY_STATUS.md`
+- `docs/INCIDENT_RESPONSE_PLAN.md`
 - `docs/SUPPLY_CHAIN_POLICY.md`
 - `docs/MERKLE_SECURITY_MODEL.md`
 
@@ -95,6 +99,7 @@ Pipeline evidence:
 - External PKI/HSM trust and operational controls remain deployment responsibilities.
 - Third-party advisory latency remains possible between disclosure and patch.
 - Runtime side-channel resistance depends on platform hardening and hardware profile.
+- In-memory per-process rate limiting is not globally consistent in multi-replica deployments; production requires an external distributed limiter or ingress-level limiting policy.
 
 ## 10. Certification Intent
 
@@ -113,7 +118,7 @@ This section describes how each FSR is implemented in the TOE, and how implement
 | FSR-03 Immutable logging | Append-only chain with hash-linked entries and Merkle leaf/node domain separation. | `crates/immutable-logging/src/chain.rs`, `crates/immutable-logging/src/merkle_service.rs`, `crates/crypto-core/src/merkle.rs` | `cargo test -p rsrp-immutable-ledger --locked`, `cargo test -p rsrp-security-core --locked` |
 | FSR-04 Compact inclusion proof | Chain proof uses compact membership paths (`O(log n)`) bound to chain root and head hash. | `crates/immutable-logging/src/chain.rs` | `test_chain_proof_is_compact_logarithmic` |
 | FSR-05 Zeroization | Key material uses explicit zeroization in cryptographic key structures and lifecycle paths. | `crates/crypto-core/src/signature.rs`, `crates/pqcrypto/src/*` | `cargo test -p rsrp-security-core --locked` (zeroization tests) |
-| FSR-06 FIPS/entropy runtime controls | Entropy self-test at startup and periodic runtime check; fail-closed readiness when configured. | `crates/crypto-core/src/entropy.rs`, `services/api-service/src/main.rs`, `services/api-service/src/handlers.rs` | `cargo test -p rsrp-security-core --locked entropy::tests::test_entropy_health_check_reports_ok -- --nocapture` |
+| FSR-06 FIPS/entropy runtime controls | Entropy self-test at startup and periodic runtime check; fail-closed readiness when configured; default key generation mode is `FipsMode::Enabled` unless explicitly disabled. | `crates/crypto-core/src/entropy.rs`, `crates/crypto-core/src/signature.rs`, `services/api-service/src/main.rs`, `services/api-service/src/handlers.rs` | `cargo test -p rsrp-security-core --locked entropy::tests::test_entropy_health_check_reports_ok -- --nocapture` |
 | FSR-07 CI crypto profile gating | Production feature graph rejects mock backend and enforces hardened profile checks. | `.github/workflows/production-gate.yml`, `crates/pqcrypto/src/lib.rs` | Production Gate workflow artifacts |
 | FSR-08 Supply-chain integrity | Locked dependencies, advisory/bans/license/source checks, SBOM/provenance/signing workflows. | `Cargo.lock`, `deny.toml`, `.github/workflows/*.yml` | `cargo deny`, `cargo audit`, SBOM and provenance artifacts |
 

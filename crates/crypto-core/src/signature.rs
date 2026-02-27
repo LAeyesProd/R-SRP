@@ -18,24 +18,35 @@ pub enum KeyGenerationError {
 }
 
 /// FIPS mode configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FipsMode {
     /// FIPS 140-2/3 compliant mode - requires OS entropy
     Enabled,
-    /// Non-FIPS mode - allows fallback to deterministic RNG
+    /// Non-FIPS mode - allows explicit fallback to alternate RNG path
     Disabled,
     /// Strict FIPS mode - fails if entropy is insufficient
     Strict,
 }
 
+impl FipsMode {
+    fn from_env_value(raw: &str) -> Self {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "enabled" => FipsMode::Enabled,
+            "strict" => FipsMode::Strict,
+            "0" | "false" | "disabled" | "off" => FipsMode::Disabled,
+            _ => FipsMode::Enabled,
+        }
+    }
+}
+
 impl Default for FipsMode {
     fn default() -> Self {
-        // Check environment for FIPS mode
-        match std::env::var("RUST_FIPS").unwrap_or_default().as_str() {
-            "1" | "strict" => FipsMode::Strict,
-            "true" | "enabled" => FipsMode::Enabled,
-            _ => FipsMode::Disabled,
-        }
+        // Default fail-closed posture: FIPS enabled unless explicitly disabled.
+        std::env::var("RUST_FIPS")
+            .ok()
+            .as_deref()
+            .map(FipsMode::from_env_value)
+            .unwrap_or(FipsMode::Enabled)
     }
 }
 
@@ -85,8 +96,8 @@ impl Ed25519KeyPair {
 
     /// Generate new Ed25519 key pair with FIPS-compliant entropy
     ///
-    /// In FIPS mode (RUST_FIPS=1), this requires OS-level entropy.
-    /// In non-FIPS mode, falls back to deterministic RNG if OsRng fails.
+    /// By default (`RUST_FIPS` unset), FIPS mode is enabled and requires OS entropy.
+    /// In explicit non-FIPS mode (`RUST_FIPS=disabled`), fallback RNG is allowed.
     ///
     /// Returns Result to allow error handling in strict mode
     pub fn generate() -> std::result::Result<Self, KeyGenerationError> {
@@ -112,10 +123,10 @@ impl Ed25519KeyPair {
                         )));
                     }
                     FipsMode::Enabled => {
-                        tracing::warn!(
-                            event = "crypto.fips_fallback",
+                        tracing::error!(
+                            event = "crypto.entropy_unavailable",
                             error = %e,
-                            "OS entropy unavailable, using fallback RNG (non-FIPS)"
+                            "OS entropy unavailable while FIPS mode is enabled"
                         );
                         return Err(KeyGenerationError::EntropyError(format!(
                             "FIPS enabled mode: OS entropy unavailable: {}",
@@ -123,7 +134,11 @@ impl Ed25519KeyPair {
                         )));
                     }
                     FipsMode::Disabled => {
-                        // Use fallback silently
+                        tracing::warn!(
+                            event = "crypto.entropy_fallback_non_fips",
+                            error = %e,
+                            "OS entropy unavailable; using explicit non-FIPS fallback RNG"
+                        );
                         Self::generate_fallback()
                     }
                 }
@@ -365,5 +380,13 @@ mod tests {
         assert_ne!(key_pair.secret_seed, [0u8; 32]);
         key_pair.zeroize();
         assert_eq!(key_pair.secret_seed, [0u8; 32]);
+    }
+
+    #[test]
+    fn test_fips_mode_parsing_is_fail_closed_by_default() {
+        assert_eq!(FipsMode::from_env_value("enabled"), FipsMode::Enabled);
+        assert_eq!(FipsMode::from_env_value("strict"), FipsMode::Strict);
+        assert_eq!(FipsMode::from_env_value("disabled"), FipsMode::Disabled);
+        assert_eq!(FipsMode::from_env_value("unexpected"), FipsMode::Enabled);
     }
 }

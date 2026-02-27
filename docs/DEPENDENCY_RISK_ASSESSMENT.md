@@ -10,6 +10,7 @@ This note documents the remaining dependency risk that is currently accepted wit
 - Advisory: `RUSTSEC-2025-0134`
 - Package: `rustls-pemfile 2.2.0`
 - Exposure path: transitive via `axum-server` in `services/api-service`
+- Mandatory review deadline: `2026-03-31` (tracked in `deny.toml` exception)
 - Current status:
   - direct usages removed from codebase (`api-service` now uses `rustls::pki_types::pem::PemObject`)
   - no direct import of `rustls-pemfile` remains in workspace manifests
@@ -38,6 +39,7 @@ This note documents the remaining dependency risk that is currently accepted wit
 - Escalation trigger:
   - new CVE/RUSTSEC with exploitable impact on the transitive path
   - available stable migration path in `axum-server`/dependency chain
+  - review deadline reached without re-assessment
 
 ## 6. Remediation Plan
 1. Track upstream migration away from `rustls-pemfile` in `axum-server` stack.

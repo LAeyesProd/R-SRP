@@ -181,15 +181,22 @@ impl HsmSession for SoftHsm {
 
 /// Create HSM session based on configuration
 pub fn create_hsm_session(config: &HsmConfig) -> Result<Box<dyn HsmSession>> {
-    if matches!(config.hsm_type, HsmType::SoftHSM) && is_production_environment() {
-        return Err(CryptoError::HsmError(
-            "SoftHSM is forbidden in production environment".to_string(),
-        ));
-    }
     match config.hsm_type {
-        HsmType::SoftHSM => Ok(Box::new(SoftHsm::new(config.clone()))),
+        HsmType::SoftHSM => {
+            if is_production_environment() {
+                return Err(CryptoError::HsmError(
+                    "SoftHSM is forbidden in production environment".to_string(),
+                ));
+            }
+            if !soft_hsm_explicitly_allowed() && !cfg!(test) {
+                return Err(CryptoError::HsmError(
+                    "SoftHSM is disabled by default outside tests; set RSRP_ALLOW_SOFT_HSM=1 for controlled non-production usage".to_string(),
+                ));
+            }
+            Ok(Box::new(SoftHsm::new(config.clone())))
+        }
         _ => Err(CryptoError::HsmError(format!(
-            "HSM type {:?} not implemented",
+            "HSM type {:?} is declared but not implemented in this open-source TOE build",
             config.hsm_type
         ))),
     }
@@ -247,10 +254,23 @@ fn is_production_environment() -> bool {
         std::env::var("ENV").ok(),
         std::env::var("APP_ENV").ok(),
         std::env::var("RUST_ENV").ok(),
+        std::env::var("RSRP_DEPLOYMENT_PROFILE").ok(),
     ]
     .into_iter()
     .flatten()
-    .any(|v| matches!(v.to_ascii_lowercase().as_str(), "prod" | "production"))
+    .any(|v| {
+        matches!(
+            v.to_ascii_lowercase().as_str(),
+            "prod" | "production" | "hardened"
+        )
+    })
+}
+
+fn soft_hsm_explicitly_allowed() -> bool {
+    std::env::var("RSRP_ALLOW_SOFT_HSM")
+        .ok()
+        .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
 }
 
 #[cfg(test)]

@@ -30,7 +30,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.90.0
 
       - name: Prefetch dependencies
         run: cargo fetch --locked
@@ -40,7 +40,7 @@ jobs:
 
       - name: Generate CycloneDX SBOM
         run: |
-          cargo cyclonedx --manifest-path Cargo.toml --all --all-features --format json
+          cargo cyclonedx --manifest-path Cargo.toml --all --format json
           mkdir -p sbom
           find . -type f \( -name "*.cdx.json" -o -name "bom.json" -o -name "*.bom.json" \) \
             -not -path "./target/*" \
