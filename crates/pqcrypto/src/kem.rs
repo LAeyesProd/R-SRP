@@ -276,8 +276,7 @@ impl KemProvider for OqsKemProvider {
         "oqs"
     }
 
-    fn generate_keypair(&self, _level: KyberLevel) -> PqcResult<(KyberPublicKey, KyberSecretKey)> {
-        let level = _level;
+    fn generate_keypair(&self, level: KyberLevel) -> PqcResult<(KyberPublicKey, KyberSecretKey)> {
         oqs::init();
         let kem = oqs_kem_for_level(level)?;
         let (pk, sk) = kem
@@ -306,11 +305,11 @@ impl KemProvider for OqsKemProvider {
 
     fn encapsulate(
         &self,
-        _level: KyberLevel,
-        _public_key: &KyberPublicKey,
+        level: KyberLevel,
+        public_key: &KyberPublicKey,
     ) -> PqcResult<(Vec<u8>, KyberCiphertext)> {
         oqs::init();
-        let kem = oqs_kem_for_level(_level)?;
+        let kem = oqs_kem_for_level(level)?;
         let pk = kem
             .public_key_from_bytes(&public_key.key)
             .ok_or_else(|| PqcError::InvalidKey("Invalid ML-KEM public key length".into()))?;
@@ -320,7 +319,7 @@ impl KemProvider for OqsKemProvider {
         Ok((
             ss.into_vec(),
             KyberCiphertext {
-                level: _level,
+                level,
                 ciphertext: ct.into_vec(),
             },
         ))
@@ -328,12 +327,12 @@ impl KemProvider for OqsKemProvider {
 
     fn decapsulate(
         &self,
-        _level: KyberLevel,
-        _secret_key: &KyberSecretKey,
-        _ciphertext: &KyberCiphertext,
+        level: KyberLevel,
+        secret_key: &KyberSecretKey,
+        ciphertext: &KyberCiphertext,
     ) -> PqcResult<Vec<u8>> {
         oqs::init();
-        let kem = oqs_kem_for_level(_level)?;
+        let kem = oqs_kem_for_level(level)?;
         let sk = kem
             .secret_key_from_bytes(&secret_key.key)
             .ok_or_else(|| PqcError::InvalidKey("Invalid ML-KEM secret key length".into()))?;
