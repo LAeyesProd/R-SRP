@@ -21,7 +21,7 @@ env:
   COSIGN_EXPERIMENTAL: "1"
   COSIGN_REPOSITORY: ghcr.io
   IMAGE_REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_NAME: laeyesprod/r-srp
 
 jobs:
   build-and-sign:
