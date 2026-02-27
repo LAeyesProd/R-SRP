@@ -5,6 +5,12 @@ edition = "2021"
 license.workspace = true
 publish = false
 
+[features]
+default = []
+real-crypto = ["rsrp-pqcrypto/real-crypto"]
+mock-crypto = ["rsrp-pqcrypto/mock-crypto"]
+production = ["real-crypto", "rsrp-pqcrypto/production"]
+
 [dependencies]
 chrono = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

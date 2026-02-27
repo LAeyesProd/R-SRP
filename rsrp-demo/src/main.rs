@@ -11,7 +11,12 @@ use immutable_logging::{
     log_entry::{Decision as LogDecision, EventType, LogEntry},
     ImmutableLog,
 };
-use pqcrypto::{hybrid::HybridSigner, Dilithium, DilithiumLevel};
+use pqcrypto::{hybrid::HybridSigner, Dilithium};
+
+#[cfg(all(feature = "production", feature = "mock-crypto"))]
+compile_error!("`production` cannot be combined with `mock-crypto` for rsrp-demo.");
+#[cfg(all(not(debug_assertions), feature = "mock-crypto"))]
+compile_error!("`mock-crypto` is forbidden in release builds for rsrp-demo.");
 
 fn map_decision(d: crue_engine::decision::Decision) -> LogDecision {
     match d {
@@ -24,6 +29,13 @@ fn map_decision(d: crue_engine::decision::Decision) -> LogDecision {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    pqcrypto::validate_runtime_security_config()?;
+
+    #[cfg(feature = "production")]
+    let sig_level = pqcrypto::PRODUCTION_DEFAULT_DILITHIUM_LEVEL;
+    #[cfg(not(feature = "production"))]
+    let sig_level = pqcrypto::DilithiumLevel::Dilithium2;
+
     let src = r#"RULE CRUE_900 VERSION 1.0 WHEN agent.requests_last_hour >= 50 THEN BLOCK WITH CODE "VOLUME_EXCEEDED""#;
     let ast = crue_dsl::parser::parse(src)?;
     let bytecode = crue_dsl::compiler::Compiler::compile(&ast)?;
@@ -73,7 +85,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         request_hour: 10,
         is_within_mission_hours: true,
     };
-    let engine_hybrid_signer = HybridSigner::new(DilithiumLevel::Dilithium2);
+    let engine_hybrid_signer = HybridSigner::new(sig_level);
     let engine_hybrid_kp = engine_hybrid_signer.generate_keypair()?;
     let engine_hybrid_pk = engine_hybrid_kp.public_key();
     let (eval, engine_envelope_v1) = engine.evaluate_with_signed_proof_v1_hybrid(
@@ -85,13 +97,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (_eval2, engine_binding) =
         engine.evaluate_with_proof(&req, engine_hybrid_signer.backend_id());
     let ctx = EvaluationContext::from_request(&req);
+    #[cfg(not(feature = "production"))]
     let vm_eval = BytecodeVm::eval(&bytecode, &ctx)?;
+    #[cfg(feature = "production")]
+    let _ = BytecodeVm::eval(&bytecode, &ctx)?;
 
-    let dilithium = Dilithium::new(DilithiumLevel::Dilithium2);
+    let dilithium = Dilithium::new(sig_level);
     let (pk, sk) = dilithium.generate_keypair()?;
     let pq_sig = dilithium.sign(&sk, &bytecode.instructions)?;
+    #[cfg(not(feature = "production"))]
     let pq_ok = dilithium.verify(&pk, &bytecode.instructions, &pq_sig)?;
+    #[cfg(feature = "production")]
+    let _ = dilithium.verify(&pk, &bytecode.instructions, &pq_sig)?;
+
+    #[cfg(not(feature = "production"))]
     let binding_ok = if let Some(binding) = &engine_binding {
+        binding.verify_recompute(
+            &bytecode,
+            &req,
+            &ctx,
+            eval.decision,
+            engine_hybrid_signer.backend_id(),
+        )?
+    } else {
+        false
+    };
+    #[cfg(feature = "production")]
+    let _ = if let Some(binding) = &engine_binding {
         binding.verify_recompute(
             &bytecode,
             &req,
@@ -112,7 +144,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         None
     };
+    #[cfg(not(feature = "production"))]
     let engine_proof_v1 = engine_proof_v1_bytes.is_some();
+    #[cfg(not(feature = "production"))]
     let (engine_proof_v1_size, engine_proof_v1_hash) = if let Some(bytes) = &engine_proof_v1_bytes {
         let digest = crypto_core::hash::sha256(bytes);
         (bytes.len(), crypto_core::hash::hex_encode(&digest))
@@ -135,14 +169,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let entry = builder.build()?;
     let appended = log.append(entry).await?;
+    #[cfg(not(feature = "production"))]
     let ledger_proof_attached = appended.proof_envelope_v1_b64().is_some();
     let proof = log
         .get_chain_proof(appended.entry_id())
         .await
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "proof missing"))?;
+        .ok_or_else(|| std::io::Error::other("proof missing"))?;
     let proof_ok = verify_chain_proof(&proof);
     let chain_ok = log.verify().await?;
 
+    #[cfg(feature = "production")]
+    println!(
+        "mode=production-hardening policy={} decision={} pq_backend={} sig_algo={} kem_algo={} engine_sig_ok={} chain_verify={} proof_verify={}",
+        ast.id,
+        eval.decision,
+        dilithium.backend_id(),
+        pqcrypto::PRODUCTION_DEFAULT_DILITHIUM_LEVEL.algorithm_id(),
+        pqcrypto::PRODUCTION_DEFAULT_KYBER_LEVEL.algorithm_id(),
+        engine_sig_ok,
+        chain_ok,
+        proof_ok
+    );
+
+    #[cfg(not(feature = "production"))]
     println!("policy={} vm_eval={} bytecode={} decision={} pq_backend={} pq_sig={} pq_verify={} engine_proof_backend={} engine_binding={} binding_ok={} engine_proof_v1={} engine_v1_size={} engine_v1_sha256={} engine_sig_ok={} ledger_proof_attached={} ledger_entry={} chain_verify={} proof_verify={}",
         ast.id, vm_eval, bytecode.instructions.len(), eval.decision, dilithium.backend_id(), pq_sig.signature.len(), pq_ok, engine_hybrid_signer.backend_id(), engine_binding.is_some(), binding_ok, engine_proof_v1, engine_proof_v1_size, engine_proof_v1_hash, engine_sig_ok, ledger_proof_attached, appended.entry_id(), chain_ok, proof_ok);
     Ok(())

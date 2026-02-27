@@ -81,7 +81,7 @@ impl MerkleTree {
             return nodes[0].clone();
         }
 
-        let mid = (nodes.len() + 1) / 2;
+        let mid = nodes.len().div_ceil(2);
         let left = self.build_tree(&nodes[..mid]);
         let right = self.build_tree(&nodes[mid..]);
 
@@ -112,7 +112,7 @@ impl MerkleTree {
             return;
         }
 
-        let mid = (nodes.len() + 1) / 2;
+        let mid = nodes.len().div_ceil(2);
 
         if index < mid {
             // Build leaf-to-root proof ordering: recurse first, then append sibling subtree root.
