@@ -61,6 +61,13 @@ jobs:
           rustup show
           cargo --version
 
+      - name: Ensure clippy component is installed
+        run: |
+          set -euo pipefail
+          toolchain="$(rustup show active-toolchain | awk '{print $1}')"
+          rustup component add clippy --toolchain "$toolchain"
+          cargo clippy --version
+
       - name: Lockfile sync check
         run: cargo fetch --locked
 
