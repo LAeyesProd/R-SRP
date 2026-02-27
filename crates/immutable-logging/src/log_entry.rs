@@ -11,7 +11,7 @@ const ENTRY_SCHEMA_ID: &str = "rsrp.ledger.log_entry.full.v1";
 const COMMIT_SCHEMA_ID: &str = "rsrp.ledger.log_entry.commit.v1";
 
 /// Event types for audit logging
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum EventType {
     AccountQuery,
@@ -25,13 +25,8 @@ pub enum EventType {
     MissionCreated,
     MissionExpired,
     ExportRequested,
+    #[default]
     DataAccess,
-}
-
-impl Default for EventType {
-    fn default() -> Self {
-        EventType::DataAccess
-    }
 }
 
 /// Actor (user/system) information
@@ -78,19 +73,14 @@ impl Integrity {
 }
 
 /// Access decision
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum Decision {
+    #[default]
     Allow,
     Block,
     Warn,
     ApprovalRequired,
-}
-
-impl Default for Decision {
-    fn default() -> Self {
-        Decision::Allow
-    }
 }
 
 /// Log entry structure

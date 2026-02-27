@@ -27,7 +27,7 @@ default = ["std", "hash", "signature", "merkle"]
 std = []
 # Enable hashing (SHA-256, SHA-512, BLAKE3)
 hash = []
-# Enable digital signatures (Ed25519, RSA-PSS)
+# Enable digital signatures (Ed25519)
 signature = []
 # Enable Merkle tree implementation
 merkle = []
@@ -42,7 +42,6 @@ hmac = "0.12"
 hkdf = "0.12"
 blake3 = "1.5"
 ed25519-dalek = { version = "2.1", features = ["rand_core", "serde"] }
-rsa = { version = "0.9", features = ["sha2", "serde"] }
 signature = "2.2"
 digest = "0.10"
 rand = { version = "0.8", features = ["std", "std_rng"] }

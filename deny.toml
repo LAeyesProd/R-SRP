@@ -4,7 +4,10 @@ all-features = true
 
 [advisories]
 db-urls = ["https://github.com/rustsec/advisory-db"]
-ignore = []
+ignore = [
+    # rustls stack currently pulls rustls-pemfile transitively; no upstream replacement path exposed yet.
+    { id = "RUSTSEC-2025-0134", reason = "transitive dependency in rustls ecosystem; migration tracked" },
+]
 
 [licenses]
 allow = [
@@ -12,11 +15,13 @@ allow = [
     "Apache-2.0",
     "MIT",
     "BSD-3-Clause",
+    "BSD-2-Clause",
     "ISC",
     "MPL-2.0",
     "CC0-1.0",
     "Unlicense",
     "Unicode-3.0",
+    "OpenSSL",
 ]
 confidence-threshold = 0.8
 exceptions = []

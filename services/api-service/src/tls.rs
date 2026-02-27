@@ -4,12 +4,11 @@
 //! communication, aligned with SPIFFE-style certificate validation patterns.
 
 use rustls::{
-    pki_types::{CertificateDer, PrivateKeyDer},
+    pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer},
     server::WebPkiClientVerifier,
     version::TLS13,
     ClientConfig, RootCertStore, ServerConfig,
 };
-use std::io::{BufReader, Cursor};
 use std::path::Path;
 use std::sync::Arc;
 use thiserror::Error;
@@ -93,6 +92,7 @@ impl TlsConfig {
     }
 
     /// Build client TLS configuration for service-to-service calls
+    #[allow(dead_code)]
     pub fn build_client_config(&self, _server_name: &str) -> Result<ClientConfig, TlsError> {
         let ca_bytes = self.client_ca.as_ref().ok_or_else(|| {
             TlsError::ConfigBuild(
@@ -112,27 +112,25 @@ impl TlsConfig {
 }
 
 fn parse_cert_chain(bytes: &[u8]) -> Result<Vec<CertificateDer<'static>>, TlsError> {
-    let mut reader = BufReader::new(Cursor::new(bytes));
-    let certs = rustls_pemfile::certs(&mut reader)
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|e| TlsError::CertificateParse(e.to_string()))?;
-
-    if !certs.is_empty() {
-        return Ok(certs);
+    // Prefer PEM when present; fallback to a single DER certificate blob.
+    if bytes.starts_with(b"-----BEGIN") {
+        let certs = CertificateDer::pem_slice_iter(bytes)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| TlsError::CertificateParse(e.to_string()))?;
+        if !certs.is_empty() {
+            return Ok(certs);
+        }
     }
 
-    // Fallback: assume a single DER certificate file.
     Ok(vec![CertificateDer::from(bytes.to_vec())])
 }
 
 fn parse_private_key(bytes: &[u8]) -> Result<PrivateKeyDer<'static>, TlsError> {
-    let mut reader = BufReader::new(Cursor::new(bytes));
-    if let Some(key) = rustls_pemfile::private_key(&mut reader)
-        .map_err(|e| TlsError::CertificateParse(e.to_string()))?
-    {
-        return Ok(key);
+    if bytes.starts_with(b"-----BEGIN") {
+        if let Ok(key) = PrivateKeyDer::from_pem_slice(bytes) {
+            return Ok(key);
+        }
     }
-
     PrivateKeyDer::try_from(bytes.to_vec()).map_err(|e| TlsError::CertificateParse(e.to_string()))
 }
 

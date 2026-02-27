@@ -27,23 +27,18 @@ pub const RULE_PREFIX: &str = "CRUE";
 pub const RULE_VERSION: &str = "1.0.0";
 
 /// Rule severity levels
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum Severity {
     /// Critical - Immediate block
     Critical,
     /// High - Block with alert
+    #[default]
     High,
     /// Medium - Warning
     Medium,
     /// Low - Log only
     Low,
-}
-
-impl Default for Severity {
-    fn default() -> Self {
-        Severity::High
-    }
 }
 
 /// Rule action types

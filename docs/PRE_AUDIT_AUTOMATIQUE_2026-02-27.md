@@ -18,35 +18,23 @@ Contexte: verification technique avant audit externe.
 ### PASS
 - Formatting: `PASS`
 - Tests workspace: `PASS` (tous les tests unitaires/all-targets)
+- Clippy strict: `PASS` (`cargo clippy --workspace --all-targets -- -D warnings`)
+- Security audit: `PASS` (`cargo audit` -> `0 vulnerabilities`)
+- Policy `cargo deny`: `PASS` (`advisories ok, bans ok, licenses ok, sources ok`)
 - ProofEnvelopeV1 vectors:
   - Python: `PASS`
   - TypeScript/Node: `PASS`
 
-### FAIL / BLOQUANTS
-1. Vulnerabilite crypto dependance (`cargo audit`)
-- `RUSTSEC-2023-0071` sur `rsa 0.9.10` (Marvin attack timing side-channel)
-- Statut: `OPEN` (pas de patch upstream disponible)
+### OPEN / POINTS RESIDUELS
+1. Dependance transitive unmaintained (`cargo audit`)
+- `rustls-pemfile 2.2.0` remonte en warning `RUSTSEC-2025-0134` (via `axum-server`).
+- Statut: `OPEN` (transitive; direct usages supprimes dans `api-service`).
 
-2. Dependances non maintenues (`cargo audit` / `cargo deny`)
-- `rustls-pemfile` (1.0.4 et 2.2.0) marque unmaintained (`RUSTSEC-2025-0134`)
-- Statut: `OPEN`
-
-3. Qualite stricte (`clippy -D warnings`)
-- Echec sur plusieurs crates (derive defaults, `is_multiple_of`, `div_ceil`, etc.)
-- Statut: `OPEN`
-
-4. OQS real-crypto non validable localement
+2. OQS real-crypto non validable localement
 - `cmake` absent
 - `clang` absent
 - `LIBCLANG_PATH` non configure
 - `cargo check ... --features real-crypto` echoue (bindgen/libclang)
-- Statut: `OPEN`
-
-5. Policy `cargo deny`
-- `rsrp-demo` sans license declaree (`unlicensed`)
-- Licenses manquantes dans allow-list (`BSD-2-Clause`, `OpenSSL`)
-- Wildcard path dependencies dans `rsrp-demo/Cargo.toml`
-- Vuln/advisories remontees (cf points 1 et 2)
 - Statut: `OPEN`
 
 ### LIMITATIONS ENVIRONNEMENT
@@ -67,21 +55,31 @@ Contexte: verification technique avant audit externe.
 - Re-ecrit en schema compatible `cargo-deny` moderne (parse OK)
 - Le check fonctionne et remonte maintenant des findings reelles
 
+4. Durcissement crypto / supply-chain
+- Suppression de la dependance `rsa` du workspace et de `rsrp-security-core`
+- Chemin RSA-PSS legacy force en `disabled` explicite (erreur claire; plus de crypto operationnelle RSA)
+- `Cargo.lock` regenere sans `rsa` (`RUSTSEC-2023-0071` elimine)
+
+5. Remediation `rustls-pemfile` cote code applicatif
+- Suppression des dependances directes `rustls-pemfile` + `pem` dans `services/api-service/Cargo.toml`
+- Parsing PEM migre vers `rustls::pki_types::pem::PemObject` dans `services/api-service/src/tls.rs`
+
+6. Qualite stricte workspace
+- Corrections `clippy -D warnings` appliquees (`derive(Default)`, `is_multiple_of`, `div_ceil`, `len/is_empty`, `io::Error::other`, `large_enum_variant`, etc.)
+- Resultat: clippy strict `PASS` sur tout le workspace
+
 ## Priorites avant audit externe
 ### P0 (bloquant audit)
-1. Traiter la strategie `rsa` (suppression/isolement chemin exposable reseau ou mitigation forte documentee)
-2. Remplacer/eliminer `rustls-pemfile` dans les chemins controlables
-3. Outiller machine CI/local pour `real-crypto`:
+1. Outiller machine CI/local pour `real-crypto`:
    - installer `cmake`
    - installer `clang/libclang`
    - configurer `LIBCLANG_PATH`
+2. Documenter et suivre la sortie de `rustls-pemfile` transitive des dependances serveur (actuellement warning unmaintained, non vuln exploit connue).
 
 ### P1
-1. Fermer `clippy -D warnings` sur workspace
-2. Declarer license de `rsrp-demo` + supprimer wildcard deps
-3. Etendre allow-list licenses si juridiquement valide (ex: `BSD-2-Clause`, `OpenSSL`)
-4. Ajouter job Go interop et Terraform validate dans CI (ou documenter exclusion)
+1. Ajouter job Go interop et Terraform validate dans CI (ou documenter exclusion)
+2. Reduire les warnings `cargo-deny` non bloquants (duplicates lockfile/allow-list non rencontree)
 
 ## Verdict pre-audit
-- Niveau actuel: **techniquement stable pour tests unitaires**, mais **pas encore pret audit externe**.
-- Raisons: vulnerabilite crypto dependance ouverte, advisories unmaintained, et absence de validation `real-crypto` sur environnement outille.
+- Niveau actuel: **pre-audit technique solide** (tests + clippy strict + audit vuln + deny passent).
+- Bloquants restants pour audit externe: **validation `real-crypto` OQS** sur environnement outille et resolution/suivi de la dependance transitive unmaintained `rustls-pemfile`.

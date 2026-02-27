@@ -2,13 +2,14 @@
 name = "rsrp-demo"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
 publish = false
 
 [dependencies]
 chrono = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
-rsrp-policy-dsl = { path = "../crates/crue-dsl" }
-rsrp-proof-engine = { path = "../crates/crue-engine", features = ["pq-proof"] }
-rsrp-pqcrypto = { path = "../crates/pqcrypto" }
-rsrp-immutable-ledger = { path = "../crates/immutable-logging" }
-crypto-core = { package = "rsrp-security-core", path = "../crates/crypto-core" }
+rsrp-policy-dsl = { version = "0.9.6", path = "../crates/crue-dsl" }
+rsrp-proof-engine = { version = "0.9.6", path = "../crates/crue-engine", features = ["pq-proof"] }
+rsrp-pqcrypto = { version = "0.9.6", path = "../crates/pqcrypto" }
+rsrp-immutable-ledger = { version = "0.9.6", path = "../crates/immutable-logging" }
+crypto-core = { package = "rsrp-security-core", version = "0.9.6", path = "../crates/crypto-core" }
