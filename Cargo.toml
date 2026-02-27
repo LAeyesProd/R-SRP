@@ -15,13 +15,13 @@ members = [
 ]
 
 [workspace.package]
-version = "0.9.4"
+version = "0.9.5"
 edition = "2021"
 license = "EUPL-1.2"
 authors = ["Aymeric Le Cloitre-Maternat (ALM) <aymeric@rsrp.io>", "Rsrp Systems"]
 description = "Tamper-evident deterministic decision engine for critical systems"
-repository = "https://github.com/rsrp/rsrp"
-homepage = "https://rsrp.io"
+repository = "https://github.com/LAeyesProd/R-SRP.git"
+homepage = "https://github.com/LAeyesProd/R-SRP.git"
 keywords = ["security", "audit", "zero-trust", "cryptography", "immutable"]
 categories = ["cryptography", "security"]
 
