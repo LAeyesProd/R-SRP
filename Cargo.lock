@@ -49,7 +49,6 @@ dependencies = [
  "chrono",
  "ipnet",
  "jsonwebtoken",
- "reqwest",
  "rsrp-immutable-ledger",
  "rsrp-proof-engine",
  "rsrp-security-core",

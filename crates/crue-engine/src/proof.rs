@@ -351,11 +351,13 @@ impl ProofEnvelopeV1 {
     }
 
     pub fn verify_ed25519(&self, public_key: &[u8]) -> Result<bool, String> {
+        #[cfg(feature = "pq-proof")]
         let sig = match &self.signature {
             SignatureV1::Ed25519(sig) => sig,
-            #[cfg(feature = "pq-proof")]
             SignatureV1::Hybrid(_) => return Ok(false),
         };
+        #[cfg(not(feature = "pq-proof"))]
+        let SignatureV1::Ed25519(sig) = &self.signature;
         let payload = self.signing_bytes()?;
         crypto_core::signature::verify(
             &payload,
