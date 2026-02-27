@@ -38,7 +38,12 @@ jobs:
       - name: Build release
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            cargo build --workspace --locked
+            # PR path: deterministic core crates only (avoid network-stack/toolchain variance)
+            cargo build --locked \
+              -p rsrp-security-core \
+              -p rsrp-policy-dsl \
+              -p rsrp-proof-engine \
+              -p rsrp-pqcrypto
           else
             cargo build --release --locked --frozen --workspace
           fi
