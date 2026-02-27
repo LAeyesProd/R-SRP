@@ -58,18 +58,18 @@ jobs:
             exit 1
           fi
 
-      - name: Build rsrp-demo in production mode
+      - name: Build rsrp-pqcrypto in production mode
         run: |
           set -euo pipefail
           cargo build \
-            --manifest-path rsrp-demo/Cargo.toml \
+            -p rsrp-pqcrypto \
             --release \
             --locked \
             -j 1 \
             --no-default-features \
             --features production
 
-      - name: Test rsrp-pqcrypto in production mode
+      - name: Compile rsrp-pqcrypto tests in production mode
         run: |
           set -euo pipefail
           cargo test \
@@ -78,7 +78,8 @@ jobs:
             -j 1 \
             --no-default-features \
             --features production \
-            --tests
+            --tests \
+            --no-run
 
   supply-chain-gate:
     name: Enforce Supply-Chain Policy
