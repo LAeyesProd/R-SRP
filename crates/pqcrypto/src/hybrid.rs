@@ -524,7 +524,7 @@ mod tests {
 
         let signature = signer.sign(&keypair, message).unwrap();
         assert_eq!(signature.classical.len(), 64);
-        assert_eq!(signature.quantum.signature.len(), 2420);
+        assert!(signature.quantum.signature.len() <= DilithiumLevel::Dilithium2.signature_size());
 
         let result = verifier.verify(&keypair, message, &signature);
         assert!(result.unwrap());

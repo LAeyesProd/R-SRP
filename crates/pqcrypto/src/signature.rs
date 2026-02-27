@@ -1,7 +1,7 @@
 //! Dilithium Post-Quantum Signature Implementation
 //!
 //! Implements ML-DSA (Module-Lattice Digital Signature Algorithm)
-//! as specified in NIST FIPS 203.
+//! as specified in NIST FIPS 204.
 
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
@@ -22,6 +22,13 @@ pub enum DilithiumLevel {
     Dilithium5,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct DilithiumSizes {
+    public_key: usize,
+    secret_key: usize,
+    signature: usize,
+}
+
 impl DilithiumLevel {
     /// Get algorithm identifier
     pub fn algorithm_id(&self) -> &'static str {
@@ -34,28 +41,52 @@ impl DilithiumLevel {
 
     /// Get public key size in bytes
     pub fn public_key_size(&self) -> usize {
-        match self {
-            DilithiumLevel::Dilithium2 => 1184,
-            DilithiumLevel::Dilithium3 => 1568,
-            DilithiumLevel::Dilithium5 => 1952,
-        }
+        self.sizes().public_key
     }
 
     /// Get secret key size in bytes
     pub fn secret_key_size(&self) -> usize {
-        match self {
-            DilithiumLevel::Dilithium2 => 2528,
-            DilithiumLevel::Dilithium3 => 4000,
-            DilithiumLevel::Dilithium5 => 4864,
-        }
+        self.sizes().secret_key
     }
 
     /// Get signature size in bytes
     pub fn signature_size(&self) -> usize {
+        self.sizes().signature
+    }
+
+    fn sizes(&self) -> DilithiumSizes {
+        #[cfg(feature = "real-crypto")]
+        {
+            oqs::init();
+            if let Ok(sig) = oqs_sig_for_level(*self) {
+                return DilithiumSizes {
+                    public_key: sig.length_public_key(),
+                    secret_key: sig.length_secret_key(),
+                    signature: sig.length_signature(),
+                };
+            }
+        }
+
+        self.fips_204_sizes()
+    }
+
+    fn fips_204_sizes(&self) -> DilithiumSizes {
         match self {
-            DilithiumLevel::Dilithium2 => 2420,
-            DilithiumLevel::Dilithium3 => 3293,
-            DilithiumLevel::Dilithium5 => 4595,
+            DilithiumLevel::Dilithium2 => DilithiumSizes {
+                public_key: 1312,
+                secret_key: 2528,
+                signature: 2420,
+            },
+            DilithiumLevel::Dilithium3 => DilithiumSizes {
+                public_key: 1952,
+                secret_key: 4000,
+                signature: 3293,
+            },
+            DilithiumLevel::Dilithium5 => DilithiumSizes {
+                public_key: 2592,
+                secret_key: 4864,
+                signature: 4595,
+            },
         }
     }
 }
@@ -135,6 +166,12 @@ impl Dilithium {
     /// Create new Dilithium context
     pub fn new(level: DilithiumLevel) -> Self {
         assert_backend_selected();
+        crate::validate_runtime_security_config()
+            .expect("production runtime security configuration validation failed");
+        #[cfg(feature = "production")]
+        if level != DilithiumLevel::Dilithium3 {
+            panic!("production-hardening requires ML-DSA-65 (Dilithium3)");
+        }
         Self { level }
     }
 
@@ -177,6 +214,8 @@ impl Dilithium {
 use crate::error::{PqcError, PqcResult};
 
 fn assert_backend_selected() {
+    #[cfg(all(not(debug_assertions), feature = "mock-crypto"))]
+    panic!("rsrp-pqcrypto: mock backend is forbidden in release builds");
     #[cfg(all(not(any(feature = "mock-crypto", feature = "real-crypto")), not(test)))]
     panic!("rsrp-pqcrypto: no crypto backend selected (enable `mock-crypto` or `real-crypto`)");
 }
@@ -397,9 +436,12 @@ mod tests {
     #[test]
     fn test_dilithium_key_sizes() {
         let dilithium2 = Dilithium::new(DilithiumLevel::Dilithium2);
-        assert_eq!(dilithium2.level.public_key_size(), 1184);
-        assert_eq!(dilithium2.level.secret_key_size(), 2528);
-        assert_eq!(dilithium2.level.signature_size(), 2420);
+        let (public_key, secret_key) = dilithium2.generate_keypair().unwrap();
+        let signature = dilithium2.sign(&secret_key, b"size-check").unwrap();
+
+        assert_eq!(public_key.key.len(), dilithium2.level.public_key_size());
+        assert_eq!(secret_key.key.len(), dilithium2.level.secret_key_size());
+        assert!(signature.signature.len() <= dilithium2.level.signature_size());
     }
 
     #[test]

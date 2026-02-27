@@ -137,6 +137,12 @@ impl Kyber {
     /// Create new Kyber context
     pub fn new(level: KyberLevel) -> Self {
         assert_backend_selected();
+        crate::validate_runtime_security_config()
+            .expect("production runtime security configuration validation failed");
+        #[cfg(feature = "production")]
+        if level != KyberLevel::Kyber768 {
+            panic!("production-hardening requires ML-KEM-768 (Kyber768)");
+        }
         Self { level }
     }
 
@@ -174,6 +180,8 @@ impl Kyber {
 }
 
 fn assert_backend_selected() {
+    #[cfg(all(not(debug_assertions), feature = "mock-crypto"))]
+    panic!("rsrp-pqcrypto: mock backend is forbidden in release builds");
     #[cfg(all(not(any(feature = "mock-crypto", feature = "real-crypto")), not(test)))]
     panic!("rsrp-pqcrypto: no KEM backend selected (enable `mock-crypto` or `real-crypto`)");
 }

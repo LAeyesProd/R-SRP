@@ -6,6 +6,21 @@
 
 ---
 
+## 0. Production-Hardening Addendum (2026-02-27)
+
+- Frozen production crypto baseline:
+  - `ML-KEM-768`
+  - `ML-DSA-65`
+- Production feature gate now maps to:
+  - `production = ["real-crypto", "kyber768", "dilithium3"]`
+- Hybrid mode is mandatory in production:
+  - runtime rejects disabling hybrid requirements
+- In production-hardening:
+  - debug/trace logging levels are rejected at startup
+  - mock backend use is blocked in release builds
+
+---
+
 ## 1. Executive Summary
 
 This document provides a comprehensive threat model for the R-SRP (Risk-Based Security Policy Engine) system. The analysis uses the **STRIDE** methodology to identify potential threats and provides CVSS-based risk scoring for each identified vulnerability.

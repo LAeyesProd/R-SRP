@@ -27,6 +27,10 @@ name = "pqcrypto"
 default = []
 mock-crypto = []
 real-crypto = ["dep:oqs"]
+# Production hardening profile:
+# - real backend only
+# - frozen defaults: ML-KEM-768 / ML-DSA-65
+production = ["real-crypto", "kyber768", "dilithium3"]
 use-pure-rust = []
 
 # Enable Dilithium (signature)
