@@ -31,6 +31,8 @@ jobs:
 
       - name: Install real-crypto dependencies
         run: |
+          set -euo pipefail
+
           sudo apt-get update
           sudo apt-get install -y \
             build-essential \
@@ -41,9 +43,9 @@ jobs:
             llvm-dev \
             libclang-dev
 
-          LIBCLANG_SO="$(ldconfig -p | awk '/libclang\.so/{print $NF; exit}')"
+          LIBCLANG_SO="$(ldconfig -p | awk '/libclang\.so/{print $NF; exit}' || true)"
           if [ -z "${LIBCLANG_SO}" ]; then
-            LIBCLANG_SO="$(find /usr/lib -type f -name 'libclang.so*' | head -n 1)"
+            LIBCLANG_SO="$(find /usr/lib /lib -type f -name 'libclang.so*' -print -quit 2>/dev/null || true)"
           fi
           if [ -z "${LIBCLANG_SO}" ]; then
             echo "libclang shared library not found" >&2
