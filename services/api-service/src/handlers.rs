@@ -46,15 +46,34 @@ pub async fn ready_check(State(state): State<Arc<AppState>>) -> Json<ReadyRespon
     // Check if CRUE engine is initialized
     let rule_count = state.engine.rule_count();
     let engine_ready = rule_count > 0;
+    let (entropy_ready, entropy_status) = if state.entropy_health_enabled {
+        let entropy = state.entropy_health.lock().await;
+        (
+            entropy.healthy,
+            if entropy.healthy {
+                "ready".to_string()
+            } else {
+                "not_ready".to_string()
+            },
+        )
+    } else {
+        (true, "disabled".to_string())
+    };
+    let ready = if state.entropy_fail_closed {
+        engine_ready && entropy_ready
+    } else {
+        engine_ready
+    };
 
     Json(ReadyResponse {
-        ready: engine_ready,
+        ready,
         components: ComponentStatus {
             engine: if engine_ready {
                 "ready".to_string()
             } else {
                 "not_ready".to_string()
             },
+            entropy: entropy_status,
         },
         timestamp: chrono::Utc::now().to_rfc3339(),
     })

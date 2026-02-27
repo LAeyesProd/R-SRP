@@ -1,6 +1,6 @@
 # R-SRP Traceability Matrix
 
-Version: 0.9.8  
+Version: 0.9.9  
 Date: 2026-02-27  
 Owner: Security Engineering
 
@@ -26,6 +26,7 @@ Rule: a PR that changes any code anchor below must update this matrix and the re
 | C-LEDGER-002 | Merkle hashing uses leaf/node domain separation prefixes. | `crates/immutable-logging/src/merkle_service.rs`, `crates/crypto-core/src/merkle.rs` | `test_leaf_and_node_hash_domain_separation`, `test_merkle_domain_separation_leaf_vs_node` | `cargo test -p rsrp-security-core --locked`, `cargo test -p rsrp-immutable-ledger --locked` | Dual-crate test logs |
 | C-API-001 | Public health endpoints are disabled by default in production unless explicitly opted in. | `services/api-service/src/main.rs` | `cargo check -p api-service --locked` | Runtime policy check at boot | Startup logs with effective config |
 | C-API-002 | In-memory local rate limiting is forbidden in production; external backend required. | `services/api-service/src/main.rs`, `services/api-service/src/middleware.rs` | `middleware::tests::*` | Runtime fail-closed check at boot | Startup logs + deployment manifest |
+| C-ENTROPY-001 | Entropy health is checked at startup and continuously at runtime; readiness is fail-closed when configured. | `crates/crypto-core/src/entropy.rs`, `services/api-service/src/main.rs`, `services/api-service/src/handlers.rs` | `entropy::tests::test_entropy_health_check_reports_ok` | `.github/workflows/production-gate.yml` | startup/readiness logs + entropy self-test CI logs |
 | C-PUB-001 | Daily publication date is derived from logged hourly roots, not directly from wall clock for publication decision. | `services/api-service/src/handlers.rs`, `crates/immutable-logging/src/publication.rs` | `handlers::tests::test_latest_hourly_root_date_uses_logged_hour_prefix` | `cargo test -p api-service --locked` | API test logs + publication JSON sample |
 | C-SC-001 | Any accepted supply-chain exception is explicitly justified and review-dated. | `deny.toml`, `docs/DEPENDENCY_RISK_ASSESSMENT.md` | `cargo deny check advisories bans licenses sources` | `.github/workflows/production-gate.yml` | `cargo deny` output + risk acceptance record |
 
@@ -46,4 +47,3 @@ For production controls:
 cargo build -p rsrp-pqcrypto --release --locked --no-default-features --features production
 cargo test -p rsrp-pqcrypto --locked --no-default-features --features production --tests --no-run
 ```
-

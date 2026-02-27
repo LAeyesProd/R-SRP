@@ -1,6 +1,6 @@
 # R-SRP Certification Bundle
 
-Version: 0.9.8
+Version: 0.9.9
 Date: 2026-02-27
 
 ## 1. Bundle Purpose
@@ -28,6 +28,7 @@ Code and tests:
 - Immutable log compact proof tests (`O(log n)`)
 - Merkle second-preimage/domain-separation tests
 - Zeroization tests and key lifecycle checks
+- Entropy runtime self-test coverage and fail-closed readiness behavior
 
 Pipeline evidence:
 - Production-only gate workflow run logs

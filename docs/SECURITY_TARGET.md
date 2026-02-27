@@ -1,6 +1,6 @@
 # R-SRP Security Target
 
-Version: 0.9.8
+Version: 0.9.9
 Date: 2026-02-27
 Owner: Security Engineering
 
@@ -70,7 +70,7 @@ Protected assets:
 - FSR-03 Immutable logging: hash-linked entries plus Merkle domain separation.
 - FSR-04 Compact inclusion proof: O(log n) membership proof for chain evidence.
 - FSR-05 Zeroization: private key memory cleared at lifecycle termination.
-- FSR-06 FIPS posture: fail on unsupported RNG/config in strict mode.
+- FSR-06 FIPS posture and entropy runtime checks: fail on unsupported RNG/config in strict mode and expose fail-closed readiness status for entropy degradation.
 - FSR-07 CI gating: production profile build mandatory; mock backend rejected.
 - FSR-08 Supply chain: lockfile, audit, deny policy, SBOM, signatures, provenance.
 

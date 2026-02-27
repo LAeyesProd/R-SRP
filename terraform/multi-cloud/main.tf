@@ -34,6 +34,24 @@ variable "cluster_name" {
   default     = "rsrp-ultra"
 }
 
+variable "admin_authorized_ip_ranges" {
+  description = "Authorized CIDR ranges for Kubernetes API access (AKS)"
+  type        = list(string)
+  default     = ["10.0.0.0/8"]
+}
+
+variable "gke_pods_secondary_range_name" {
+  description = "Secondary subnet range name used for GKE Pods (Alias IP)"
+  type        = string
+  default     = "gke-pods"
+}
+
+variable "gke_services_secondary_range_name" {
+  description = "Secondary subnet range name used for GKE Services (Alias IP)"
+  type        = string
+  default     = "gke-services"
+}
+
 variable "high_availability" {
   description = "Enable high availability mode"
   type        = bool
@@ -88,6 +106,8 @@ resource "azurerm_kubernetes_cluster" "rsrp" {
   resource_group_name = azurerm_resource_group.rsrp.name
   dns_prefix          = "rsrp"
   kubernetes_version   = "1.29"
+  private_cluster_enabled = true
+  local_account_disabled  = true
 
   # RBAC enabled
   role_based_access_control_enabled = true
@@ -103,16 +123,28 @@ resource "azurerm_kubernetes_cluster" "rsrp" {
     load_balancer_sku  = "standard"
   }
 
+  api_server_access_profile {
+    authorized_ip_ranges = var.admin_authorized_ip_ranges
+  }
+
   # Secret encryption
   secret_rotation_enabled = true
 
   # Addons
   oms_agent {
     log_analytics_workspace_id = azurerm_log_analytics_workspace.main.id
+    msi_auth_for_monitoring_enabled = true
+  }
+
+  tags = {
+    Environment  = var.environment
+    CloudProvider = "azure"
   }
 }
 
 # GCP GKE
+# snyk:ignore:SNYK-CC-TF-88 PodSecurityPolicy is removed in Kubernetes 1.25+.
+# The cluster uses GKE 1.29 with Pod Security Admission and policy enforcement via Kyverno.
 resource "google_container_cluster" "rsrp" {
   count = var.cloud_provider == "gcp" ? 1 : 0
   name     = var.cluster_name
@@ -121,6 +153,19 @@ resource "google_container_cluster" "rsrp" {
   # Release channel
   release_channel {
     channel = "STABLE"
+  }
+
+  # Required for secure VPC-native GKE networking (Alias IP ranges)
+  ip_allocation_policy {
+    cluster_secondary_range_name  = var.gke_pods_secondary_range_name
+    services_secondary_range_name = var.gke_services_secondary_range_name
+  }
+
+  resource_labels = {
+    environment      = var.environment
+    cloud_provider   = "gcp"
+    security_profile = "hardened"
+    managed_by       = "terraform"
   }
 
   # Network security
@@ -151,9 +196,6 @@ resource "google_container_cluster" "rsrp" {
     client_certificate_config {
       issue_client_certificate = false
     }
-    # Disable basic auth - use OIDC instead
-    username = ""
-    password = ""
   }
 
   # Enable master authorized networks for admin access only

@@ -3,6 +3,7 @@
 //! Provides SHA-256/SHA-512, BLAKE3, Ed25519, and RSA-PSS implementations
 //! with HSM integration support.
 
+pub mod entropy;
 pub mod error;
 pub mod hash;
 pub mod hsm;
