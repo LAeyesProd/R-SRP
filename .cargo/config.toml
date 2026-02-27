@@ -13,10 +13,7 @@ jobs = 4
 rustflags = [
   "-C", "relocation-model=pie",
   "-C", "link-arg=-Wl,-z,relro,-z,now",
-  "-C", "link-arg=-Wl,-z,noexecstack",
-  "-C", "link-arg=-Wl,-z,now",
-  "-C", "link-arg=-Wl,-z,nosuid",
-  "-C", "link-arg=-Wl,-z,nochange_page_attr"
+  "-C", "link-arg=-Wl,-z,noexecstack"
 ]
 
 [target.x86_64-pc-windows-gnu]
