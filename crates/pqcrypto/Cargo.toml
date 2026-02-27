@@ -24,7 +24,7 @@ name = "pqcrypto"
 # Future: rsrp-pqcrypto = "pqcrypto"
 
 [features]
-default = ["mock-crypto"]
+default = []
 mock-crypto = []
 real-crypto = ["dep:oqs"]
 use-pure-rust = []

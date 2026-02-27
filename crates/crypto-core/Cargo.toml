@@ -38,6 +38,8 @@ fips = []
 
 [dependencies]
 sha2 = "0.10"
+hmac = "0.12"
+hkdf = "0.12"
 blake3 = "1.5"
 ed25519-dalek = { version = "2.1", features = ["rand_core", "serde"] }
 rsa = { version = "0.9", features = ["sha2", "serde"] }

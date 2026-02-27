@@ -1,27 +1,24 @@
 //! API Handlers
 
 use axum::{
-    extract::{State, Path, Query},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::Json,
 };
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
-use std::sync::Arc;
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use chrono::Timelike;
 use std::path::Path as FsPath;
+use std::sync::Arc;
 
-use crate::AppState;
-use crate::models::*;
 use crate::error::ApiError;
-use immutable_logging::merkle_service::HourlyRoot;
-use immutable_logging::publication::{DailyPublication, TsaCmsVerifyError};
+use crate::models::*;
+use crate::AppState;
 use immutable_logging::log_entry::{
-    Compliance,
-    Decision as AuditDecision,
-    EventType,
-    LogEntry,
+    Compliance, Decision as AuditDecision, EventType, LogEntry,
     RequestContext as AuditRequestContext,
 };
+use immutable_logging::merkle_service::HourlyRoot;
+use immutable_logging::publication::{DailyPublication, TsaCmsVerifyError};
 
 /// Health check endpoint
 pub async fn health_check() -> Json<HealthResponse> {
@@ -33,17 +30,19 @@ pub async fn health_check() -> Json<HealthResponse> {
 }
 
 /// Readiness check endpoint - confirms service can handle requests
-pub async fn ready_check(
-    State(state): State<Arc<AppState>>,
-) -> Json<ReadyResponse> {
+pub async fn ready_check(State(state): State<Arc<AppState>>) -> Json<ReadyResponse> {
     // Check if CRUE engine is initialized
     let rule_count = state.engine.rule_count();
     let engine_ready = rule_count > 0;
-    
+
     Json(ReadyResponse {
         ready: engine_ready,
         components: ComponentStatus {
-            engine: if engine_ready { "ready".to_string() } else { "not_ready".to_string() },
+            engine: if engine_ready {
+                "ready".to_string()
+            } else {
+                "not_ready".to_string()
+            },
         },
         timestamp: chrono::Utc::now().to_rfc3339(),
     })
@@ -55,7 +54,7 @@ pub async fn validate_access(
     Query(params): Query<ValidateParams>,
 ) -> Result<Json<ValidationResponse>, ApiError> {
     tracing::debug!("Validating access for agent: {}", params.agent_id);
-    
+
     let request = crue_engine::EvaluationRequest {
         request_id: uuid::Uuid::new_v4().to_string(),
         agent_id: params.agent_id,
@@ -75,10 +74,11 @@ pub async fn validate_access(
         request_hour: chrono::Utc::now().hour(),
         is_within_mission_hours: true,
     };
-    
+
     let result = state.engine.evaluate(&request);
+    state.record_validation_metrics(result.decision, result.evaluation_time_ms);
     record_validation_decision_audit(&state, &request, &result).await;
-    
+
     Ok(Json(ValidationResponse {
         request_id: result.request_id,
         decision: format!("{:?}", result.decision),
@@ -97,12 +97,14 @@ pub async fn validate_access_post(
     Json(payload): Json<ValidationRequest>,
 ) -> Result<Json<ValidationResponse>, ApiError> {
     tracing::debug!("Validating access for agent: {}", payload.agent_id);
-    
+
     let request = crue_engine::EvaluationRequest {
         request_id: uuid::Uuid::new_v4().to_string(),
         agent_id: payload.agent_id,
         agent_org: payload.agent_org,
-        agent_level: payload.agent_level.unwrap_or_else(|| "standard".to_string()),
+        agent_level: payload
+            .agent_level
+            .unwrap_or_else(|| "standard".to_string()),
         mission_id: payload.mission_id,
         mission_type: payload.mission_type,
         query_type: payload.query_type,
@@ -117,10 +119,11 @@ pub async fn validate_access_post(
         request_hour: chrono::Utc::now().hour(),
         is_within_mission_hours: true,
     };
-    
+
     let result = state.engine.evaluate(&request);
+    state.record_validation_metrics(result.decision, result.evaluation_time_ms);
     record_validation_decision_audit(&state, &request, &result).await;
-    
+
     Ok(Json(ValidationResponse {
         request_id: result.request_id,
         decision: format!("{:?}", result.decision),
@@ -219,12 +222,14 @@ pub async fn verify_daily_publication(
     let mut signature_public_key_hex = None;
     if let Some(signature) = publication.signature.as_ref() {
         let payload = publication_signed_payload(&publication)?;
-        let signature_bytes = BASE64_STANDARD.decode(signature.value.as_bytes()).map_err(|e| {
-            ApiError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Invalid publication signature encoding: {e}"),
-            )
-        })?;
+        let signature_bytes = BASE64_STANDARD
+            .decode(signature.value.as_bytes())
+            .map_err(|e| {
+                ApiError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Invalid publication signature encoding: {e}"),
+                )
+            })?;
         if let Some(signer) = state.audit_publication_signer.as_ref() {
             let mut signer = signer.lock().await;
             let verified = signer
@@ -245,7 +250,8 @@ pub async fn verify_daily_publication(
         }
     }
 
-    let (tsa_present, tsa_url, mut tsa_verified, mut tsa_status) = tsa_verification_status(&publication);
+    let (tsa_present, tsa_url, mut tsa_verified, mut tsa_status) =
+        tsa_verification_status(&publication);
     if let (Some(tsa), Some(trust_store_path)) = (
         publication.tsa_timestamp.as_ref(),
         state.audit_tsa_trust_store_pem.as_ref(),
@@ -335,12 +341,14 @@ pub async fn publish_daily(
     if let Some(signer) = state.audit_publication_signer.as_ref() {
         let mut signer = signer.lock().await;
         let signed_payload = publication.to_canonical_json_bytes()?;
-        let signed = signer.sign_publication_payload(&signed_payload).map_err(|e| {
-            ApiError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to sign daily publication: {e}"),
-            )
-        })?;
+        let signed = signer
+            .sign_publication_payload(&signed_payload)
+            .map_err(|e| {
+                ApiError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to sign daily publication: {e}"),
+                )
+            })?;
         publisher.sign_publication_with_metadata(
             &mut publication,
             &signed.signature,
@@ -366,8 +374,14 @@ pub async fn publish_daily(
     let written = publisher.publish_to_filesystem(&publication, dir, true)?;
     let signature_algorithm = publication.signature.as_ref().map(|s| s.algorithm.clone());
     let signature_key_id = publication.signature.as_ref().map(|s| s.key_id.clone());
-    let tsa_url = publication.tsa_timestamp.as_ref().map(|t| t.tsa_url.clone());
-    let tsa_timestamp = publication.tsa_timestamp.as_ref().map(|t| t.timestamp.clone());
+    let tsa_url = publication
+        .tsa_timestamp
+        .as_ref()
+        .map(|t| t.tsa_url.clone());
+    let tsa_timestamp = publication
+        .tsa_timestamp
+        .as_ref()
+        .map(|t| t.timestamp.clone());
 
     Ok(Json(DailyPublishResponse {
         date: publication.date,
@@ -387,13 +401,17 @@ pub async fn publish_daily(
 }
 
 /// Metrics endpoint
-pub async fn metrics() -> Result<Json<MetricsResponse>, ApiError> {
+pub async fn metrics(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<MetricsResponse>, ApiError> {
+    let (total_requests, allowed_requests, blocked_requests, warnings, avg_evaluation_time_ms) =
+        state.metrics_snapshot();
     Ok(Json(MetricsResponse {
-        total_requests: 0,
-        allowed_requests: 0,
-        blocked_requests: 0,
-        warnings: 0,
-        avg_evaluation_time_ms: 0.0,
+        total_requests,
+        allowed_requests,
+        blocked_requests,
+        warnings,
+        avg_evaluation_time_ms,
     }))
 }
 
@@ -443,7 +461,10 @@ fn load_daily_publication_from_dir(
 
 fn hourly_root_hashes_for_date(roots: &[HourlyRoot], date: &str) -> Vec<String> {
     let prefix = format!("{date}T");
-    let mut filtered: Vec<&HourlyRoot> = roots.iter().filter(|r| r.hour.starts_with(&prefix)).collect();
+    let mut filtered: Vec<&HourlyRoot> = roots
+        .iter()
+        .filter(|r| r.hour.starts_with(&prefix))
+        .collect();
     filtered.sort_by(|a, b| a.hour.cmp(&b.hour));
     filtered.into_iter().map(|r| r.root_hash.clone()).collect()
 }
@@ -515,22 +536,12 @@ fn verify_previous_day_link(
     let prev_date = match previous_date(&publication.date) {
         Some(d) => d,
         None => {
-            return (
-                None,
-                "date-parse-error".to_string(),
-                None,
-                None,
-            );
+            return (None, "date-parse-error".to_string(), None, None);
         }
     };
 
     if publication.previous_day_root == zero_root {
-        return (
-            None,
-            "genesis-link".to_string(),
-            Some(prev_date),
-            None,
-        );
+        return (None, "genesis-link".to_string(), Some(prev_date), None);
     }
 
     match load_daily_publication_from_dir(dir, &prev_date) {
@@ -632,20 +643,24 @@ fn build_audit_log_entry(
         crue_engine::decision::Decision::Warn => AuditDecision::Warn,
         crue_engine::decision::Decision::ApprovalRequired => AuditDecision::ApprovalRequired,
     };
-    let mut builder = LogEntry::builder(event_type, request.agent_id.clone(), request.agent_org.clone())
-        .mission(request.mission_id.clone(), request.mission_type.clone())
-        .request(AuditRequestContext {
-            query_type: request.query_type.clone(),
-            justification: request.justification.clone(),
-            result_count: Some(request.results_last_query),
-            ip_address: None,
-            user_agent: None,
-        })
-        .compliance(Compliance {
-            legal_basis: "UNSPECIFIED".to_string(),
-            retention_years: 10,
-        })
-        .decision(decision);
+    let mut builder = LogEntry::builder(
+        event_type,
+        request.agent_id.clone(),
+        request.agent_org.clone(),
+    )
+    .mission(request.mission_id.clone(), request.mission_type.clone())
+    .request(AuditRequestContext {
+        query_type: request.query_type.clone(),
+        justification: request.justification.clone(),
+        result_count: Some(request.results_last_query),
+        ip_address: None,
+        user_agent: None,
+    })
+    .compliance(Compliance {
+        legal_basis: "UNSPECIFIED".to_string(),
+        retention_years: 10,
+    })
+    .decision(decision);
     if let Some(rule_id) = &result.rule_id {
         builder = builder.rule_id(rule_id.clone());
     }
@@ -765,7 +780,9 @@ mod tests {
     fn test_publication_signed_payload_strips_signature_and_tsa() {
         let mut service = PublicationService::new();
         let mut publication = service.create_daily_publication(&["bb".repeat(32)], 2);
-        let expected = publication.to_canonical_json_bytes().expect("expected payload");
+        let expected = publication
+            .to_canonical_json_bytes()
+            .expect("expected payload");
 
         service.sign_publication_with_metadata(&mut publication, b"sig", "ED25519", "k1");
         publication.tsa_timestamp = Some(TsaTimestamp {

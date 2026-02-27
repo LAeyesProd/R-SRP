@@ -1,6 +1,6 @@
 //! Hashing primitives - SHA-256, SHA-512, BLAKE3
 
-use crate::{HashAlgorithm, Result, CryptoError};
+use crate::{CryptoError, HashAlgorithm, Result};
 use digest::Digest;
 
 /// Compute SHA-256 hash
@@ -49,7 +49,7 @@ pub fn hex_decode(s: &str) -> Result<Vec<u8>> {
     if s.len() % 2 != 0 {
         return Err(CryptoError::HashError("Invalid hex string".to_string()));
     }
-    
+
     (0..s.len())
         .step_by(2)
         .map(|i| {
@@ -61,38 +61,13 @@ pub fn hex_decode(s: &str) -> Result<Vec<u8>> {
 
 /// Compute HMAC-SHA256
 pub fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
+    use hmac::{Hmac, Mac};
     use sha2::Sha256;
-    
-    // Simplified HMAC implementation
-    let block_size = 64;
-    let mut key_block = vec![0u8; block_size];
-    
-    if key.len() > block_size {
-        let key_hash = sha256(key);
-        key_block[..key_hash.len()].copy_from_slice(&key_hash);
-    } else {
-        key_block[..key.len()].copy_from_slice(key);
-    }
-    
-    let mut ipad = key_block.clone();
-    let mut opad = key_block;
-    
-    for b in &mut ipad {
-        *b ^= 0x36;
-    }
-    for b in &mut opad {
-        *b ^= 0x5c;
-    }
-    
-    let mut inner_hasher = Sha256::new();
-    inner_hasher.update(&ipad);
-    inner_hasher.update(data);
-    let inner = inner_hasher.finalize();
-    
-    let mut outer_hasher = Sha256::new();
-    outer_hasher.update(&opad);
-    outer_hasher.update(&inner);
-    outer_hasher.finalize().to_vec()
+
+    let mut mac =
+        Hmac::<Sha256>::new_from_slice(key).expect("HMAC-SHA256 supports arbitrary key sizes");
+    mac.update(data);
+    mac.finalize().into_bytes().to_vec()
 }
 
 /// Compute hash of multiple data chunks (for Merkle tree)
@@ -125,28 +100,28 @@ pub fn hash_concat(data: &[&[u8]], algorithm: HashAlgorithm) -> Result<Vec<u8>> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_sha256() {
         let data = b"hello world";
         let hash = sha256(data);
         assert_eq!(hash.len(), 32);
     }
-    
+
     #[test]
     fn test_sha512() {
         let data = b"hello world";
         let hash = sha512(data);
         assert_eq!(hash.len(), 64);
     }
-    
+
     #[test]
     fn test_blake3() {
         let data = b"hello world";
         let hash = blake3(data);
         assert_eq!(hash.len(), 32);
     }
-    
+
     #[test]
     fn test_hex_encode_decode() {
         let original = b"test data";
@@ -154,7 +129,7 @@ mod tests {
         let decoded = hex_decode(&encoded).unwrap();
         assert_eq!(original.as_slice(), decoded.as_slice());
     }
-    
+
     #[test]
     fn test_hmac_sha256() {
         let key = b"secret_key";
