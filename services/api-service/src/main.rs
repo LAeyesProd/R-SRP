@@ -327,8 +327,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         immutable_logging::ImmutableLog::new()
     };
-    let mission_schedule = mission_schedule::MissionScheduleStore::from_env()
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
     let audit_publications_dir = std::env::var("AUDIT_PUBLICATIONS_DIR")
         .ok()
         .filter(|v| !v.trim().is_empty())

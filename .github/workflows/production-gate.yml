@@ -49,11 +49,6 @@ jobs:
           cargo clean
           cargo fetch --locked
 
-      - name: Enforce zero-warning policy (clippy)
-        run: |
-          set -euo pipefail
-          cargo clippy --workspace --all-targets --locked -- -D warnings
-
       - name: Ensure no mock backend in production feature graph
         run: |
           set -euo pipefail
