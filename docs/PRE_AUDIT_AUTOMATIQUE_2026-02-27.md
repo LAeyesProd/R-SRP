@@ -30,12 +30,11 @@ Contexte: verification technique avant audit externe.
 - `rustls-pemfile 2.2.0` remonte en warning `RUSTSEC-2025-0134` (via `axum-server`).
 - Statut: `OPEN` (transitive; direct usages supprimes dans `api-service`).
 
-2. OQS real-crypto non validable localement
-- `cmake` absent
-- `clang` absent
-- `LIBCLANG_PATH` non configure
-- `cargo check ... --features real-crypto` echoue (bindgen/libclang)
-- Statut: `OPEN`
+2. OQS real-crypto non validable localement (Windows host)
+- Toolchain locale installee (`LLVM` + `CMake`, `LIBCLANG_PATH` resolu)
+- `cargo check -p rsrp-pqcrypto --release --no-default-features --features real-crypto` progresse, compile `liboqs`, puis echoue en phase `bindgen` (`oqs-sys` panic `bindgen::ir::context`, libclang error)
+- Le blocage n'est plus "libclang absent", mais un comportement `oqs-sys/bindgen` sur Windows MSVC
+- Statut: `OPEN` (validation `real-crypto` de reference maintenue sur CI Linux)
 
 ### LIMITATIONS ENVIRONNEMENT
 - `go` non installe (checker interop Go non execute)
@@ -90,10 +89,8 @@ Contexte: verification technique avant audit externe.
 
 ## Priorites avant audit externe
 ### P0 (bloquant audit)
-1. Outiller machine CI/local pour `real-crypto`:
-   - installer `cmake`
-   - installer `clang/libclang`
-   - configurer `LIBCLANG_PATH`
+1. Maintenir validation `real-crypto` obligatoire en CI Linux (source de verite release gate).
+   - local Windows: blocage `oqs-sys/bindgen` documente (non regressif pour la gate CI)
 2. Documenter et suivre la sortie de `rustls-pemfile` transitive des dependances serveur (actuellement warning unmaintained, non vuln exploit connue).
 
 ### P1
