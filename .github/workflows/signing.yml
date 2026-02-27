@@ -53,11 +53,6 @@ jobs:
       - name: Install Cosign
         uses: sigstore/cosign-installer@v6
       
-      - name: Generate Cosign keys
-        run: |
-          # Generate key pair if not exists
-          cosign generate-key-pair --kms key:///rsrp-ultra/signing-key
-      
       - name: Build and push image
         uses: docker/build-push-action@v5
         with:

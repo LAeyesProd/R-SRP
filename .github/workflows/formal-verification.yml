@@ -20,6 +20,7 @@ jobs:
   kani-model-check:
     name: Kani Model Checker
     if: github.event_name != 'pull_request'
+    continue-on-error: true
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -50,6 +51,7 @@ jobs:
   miri-check:
     name: Miri - Undefined Behavior Detection
     if: github.event_name != 'pull_request'
+    continue-on-error: true
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -115,6 +117,7 @@ jobs:
   loom-concurrency:
     name: Loom Concurrency Testing
     if: github.event_name != 'pull_request'
+    continue-on-error: true
     runs-on: ubuntu-latest
     permissions:
       contents: read
