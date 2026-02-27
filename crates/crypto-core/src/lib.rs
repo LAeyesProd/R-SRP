@@ -1,13 +1,13 @@
 //! Crypto Core - Cryptographic Primitives for R-SRP Ultra
-//! 
+//!
 //! Provides SHA-256/SHA-512, BLAKE3, Ed25519, and RSA-PSS implementations
 //! with HSM integration support.
 
-pub mod hash;
-pub mod signature;
-pub mod merkle;
-pub mod hsm;
 pub mod error;
+pub mod hash;
+pub mod hsm;
+pub mod merkle;
+pub mod signature;
 
 use serde::{Deserialize, Serialize};
 
@@ -85,19 +85,19 @@ pub enum KeyType {
 pub enum CryptoError {
     #[error("Hash error: {0}")]
     HashError(String),
-    
+
     #[error("Signature error: {0}")]
     SignatureError(String),
-    
+
     #[error("Key error: {0}")]
     KeyError(String),
-    
+
     #[error("HSM error: {0}")]
     HsmError(String),
-    
+
     #[error("Verification failed")]
     VerificationFailed,
-    
+
     #[error("Invalid key")]
     InvalidKey,
 }
@@ -116,13 +116,13 @@ pub type Result<T> = std::result::Result<T, CryptoError>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_default_hash_algorithm() {
         let algo: HashAlgorithm = serde_json::from_str("\"SHA256\"").unwrap();
         assert_eq!(algo, HashAlgorithm::Sha256);
     }
-    
+
     #[test]
     fn test_default_signature_algorithm() {
         let algo: SignatureAlgorithm = serde_json::from_str("\"ED25519\"").unwrap();

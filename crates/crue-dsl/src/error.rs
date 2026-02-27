@@ -7,28 +7,28 @@ use thiserror::Error;
 pub enum DslError {
     #[error("Parse error: {0}")]
     ParseError(String),
-    
+
     #[error("Compilation error: {0}")]
     CompilationError(String),
-    
+
     #[error("Validation error: {0}")]
     ValidationError(String),
-    
+
     #[error("Signature error: {0}")]
     SignatureError(String),
-    
+
     #[error("Version error: {0}")]
     VersionError(String),
-    
+
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
-    
+
     #[error("JSON error: {0}")]
     JsonError(#[from] serde_json::Error),
-    
+
     #[error("Invalid rule: {0}")]
     InvalidRule(String),
-    
+
     #[error("Bytecode error: {0}")]
     BytecodeError(String),
 }
@@ -48,7 +48,7 @@ pub type Result<T> = std::result::Result<T, DslError>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_error_serialization() {
         let error = DslError::ParseError("Invalid token".to_string());

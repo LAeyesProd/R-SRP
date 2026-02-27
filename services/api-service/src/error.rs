@@ -1,8 +1,8 @@
 //! API Error Types
 
 use axum::{
-    response::{IntoResponse, Response},
     http::StatusCode,
+    response::{IntoResponse, Response},
     Json,
 };
 use serde_json::json;
@@ -27,7 +27,7 @@ impl IntoResponse for ApiError {
         let body = Json(json!({
             "error": self.message,
         }));
-        
+
         (self.status, body).into_response()
     }
 }

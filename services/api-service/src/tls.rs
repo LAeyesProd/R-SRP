@@ -4,10 +4,10 @@
 //! communication, aligned with SPIFFE-style certificate validation patterns.
 
 use rustls::{
-    ClientConfig, RootCertStore, ServerConfig,
     pki_types::{CertificateDer, PrivateKeyDer},
     server::WebPkiClientVerifier,
     version::TLS13,
+    ClientConfig, RootCertStore, ServerConfig,
 };
 use std::io::{BufReader, Cursor};
 use std::path::Path;
@@ -46,16 +46,13 @@ impl TlsConfig {
         key_path: &Path,
         client_ca_path: Option<&Path>,
     ) -> Result<Self, TlsError> {
-        let cert_chain = std::fs::read(cert_path)
-            .map_err(|e| TlsError::CertificateRead(e.to_string()))?;
-        let private_key = std::fs::read(key_path)
-            .map_err(|e| TlsError::CertificateRead(e.to_string()))?;
+        let cert_chain =
+            std::fs::read(cert_path).map_err(|e| TlsError::CertificateRead(e.to_string()))?;
+        let private_key =
+            std::fs::read(key_path).map_err(|e| TlsError::CertificateRead(e.to_string()))?;
 
         let client_ca = if let Some(ca_path) = client_ca_path {
-            Some(
-                std::fs::read(ca_path)
-                    .map_err(|e| TlsError::CertificateRead(e.to_string()))?,
-            )
+            Some(std::fs::read(ca_path).map_err(|e| TlsError::CertificateRead(e.to_string()))?)
         } else {
             None
         };
@@ -98,7 +95,9 @@ impl TlsConfig {
     /// Build client TLS configuration for service-to-service calls
     pub fn build_client_config(&self, _server_name: &str) -> Result<ClientConfig, TlsError> {
         let ca_bytes = self.client_ca.as_ref().ok_or_else(|| {
-            TlsError::ConfigBuild("client CA/root certificate is required for client TLS".to_string())
+            TlsError::ConfigBuild(
+                "client CA/root certificate is required for client TLS".to_string(),
+            )
         })?;
 
         let root_store = load_root_store(ca_bytes)?;
@@ -134,8 +133,7 @@ fn parse_private_key(bytes: &[u8]) -> Result<PrivateKeyDer<'static>, TlsError> {
         return Ok(key);
     }
 
-    PrivateKeyDer::try_from(bytes.to_vec())
-        .map_err(|e| TlsError::CertificateParse(e.to_string()))
+    PrivateKeyDer::try_from(bytes.to_vec()).map_err(|e| TlsError::CertificateParse(e.to_string()))
 }
 
 fn load_root_store(bytes: &[u8]) -> Result<RootCertStore, TlsError> {

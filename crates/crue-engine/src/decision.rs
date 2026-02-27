@@ -52,7 +52,7 @@ impl ActionResult {
             alert_soc: false,
         }
     }
-    
+
     /// Create warning result
     pub fn warn(code: &str, message: &str) -> Self {
         ActionResult {
@@ -62,17 +62,20 @@ impl ActionResult {
             alert_soc: false,
         }
     }
-    
+
     /// Create approval required result
     pub fn approval_required(code: &str, timeout_minutes: u32) -> Self {
         ActionResult {
             decision: Decision::ApprovalRequired,
             error_code: Some(code.to_string()),
-            message: Some(format!("Approval required within {} minutes", timeout_minutes)),
+            message: Some(format!(
+                "Approval required within {} minutes",
+                timeout_minutes
+            )),
             alert_soc: false,
         }
     }
-    
+
     /// Create allow result
     pub fn allow() -> Self {
         ActionResult {
@@ -82,7 +85,7 @@ impl ActionResult {
             alert_soc: false,
         }
     }
-    
+
     /// Add SOC alert
     pub fn with_soc_alert(mut self) -> Self {
         self.alert_soc = true;
@@ -93,13 +96,13 @@ impl ActionResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_decision_display() {
         assert_eq!(format!("{}", Decision::Allow), "ALLOW");
         assert_eq!(format!("{}", Decision::Block), "BLOCK");
     }
-    
+
     #[test]
     fn test_action_result() {
         let result = ActionResult::block("VOLUME_EXCEEDED", "Quota dépassé");
