@@ -1,8 +1,8 @@
 //! API Handlers
 
 use axum::{
-    extract::{Path, Query, State},
-    http::StatusCode,
+    extract::{ConnectInfo, Path, Query, State},
+    http::{header::USER_AGENT, HeaderMap, StatusCode},
     response::Json,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
@@ -57,6 +57,11 @@ pub async fn validate_access(
     connect_info: Option<ConnectInfo<SocketAddr>>,
 ) -> Result<Json<ValidationResponse>, ApiError> {
     tracing::debug!("Validating access for agent: {}", params.agent_id);
+    let ip_address = request_ip_from_headers(&headers, connect_info.as_ref());
+    let user_agent = headers
+        .get(USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.to_string());
 
     let request = crue_engine::EvaluationRequest {
         request_id: uuid::Uuid::new_v4().to_string(),
@@ -80,7 +85,7 @@ pub async fn validate_access(
 
     let result = state.engine.evaluate(&request);
     state.record_validation_metrics(result.decision, result.evaluation_time_ms);
-    record_validation_decision_audit(&state, &request, &result).await;
+    record_validation_decision_audit(&state, &request, &result, ip_address, user_agent).await;
 
     Ok(Json(ValidationResponse {
         request_id: result.request_id,
@@ -102,6 +107,11 @@ pub async fn validate_access_post(
     Json(payload): Json<ValidationRequest>,
 ) -> Result<Json<ValidationResponse>, ApiError> {
     tracing::debug!("Validating access for agent: {}", payload.agent_id);
+    let ip_address = request_ip_from_headers(&headers, connect_info.as_ref());
+    let user_agent = headers
+        .get(USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.to_string());
 
     let request = crue_engine::EvaluationRequest {
         request_id: uuid::Uuid::new_v4().to_string(),
@@ -127,7 +137,7 @@ pub async fn validate_access_post(
 
     let result = state.engine.evaluate(&request);
     state.record_validation_metrics(result.decision, result.evaluation_time_ms);
-    record_validation_decision_audit(&state, &request, &result).await;
+    record_validation_decision_audit(&state, &request, &result, ip_address, user_agent).await;
 
     Ok(Json(ValidationResponse {
         request_id: result.request_id,
@@ -662,8 +672,8 @@ fn build_audit_log_entry(
         query_type: request.query_type.clone(),
         justification: request.justification.clone(),
         result_count: Some(request.results_last_query),
-        ip_address: None,
-        user_agent: None,
+        ip_address,
+        user_agent,
     })
     .compliance(Compliance {
         legal_basis: "UNSPECIFIED".to_string(),
