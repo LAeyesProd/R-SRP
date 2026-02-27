@@ -2,79 +2,99 @@
 
 Version: 0.9.9
 Date: 2026-02-27
+Owner: Security Engineering
 
-## 1. Bundle Purpose
+## 1. Purpose
 
-This bundle defines the minimum evidence set for external security review and certification-preparation assessments.
+This document defines the mandatory evidence package for pre-certification and external audit hand-off.
+A release is non-compliant if one required artifact is missing, unverifiable, or inconsistent with code and CI evidence.
 
-## 2. Required Documents
+## 2. Bundle Scope
 
-Core documents:
+Certification bundle coverage:
+- Security claims and threat model consistency.
+- Control implementation evidence in code and tests.
+- Supply-chain integrity evidence (SBOM, provenance, signatures).
+- Operational evidence for fail-closed production posture.
+
+## 3. Mandatory Document Set
+
+The following files are required and traceability-aligned to the release baseline:
 - `docs/SECURITY_TARGET.md`
-- `docs/ATTACK_SCENARIOS.md`
-- `docs/CRYPTO_ARCHITECTURE.md`
 - `docs/THREAT_MODEL.md`
 - `docs/THREAT_MODEL_STRIDE.md`
+- `docs/ASSUMPTIONS_REGISTER.md`
+- `docs/ATTACK_SCENARIOS.md`
+- `docs/TRACEABILITY_MATRIX.md`
+- `docs/CRYPTO_ARCHITECTURE.md`
+- `docs/ENTROPY_BOUNDARY.md`
 - `docs/KEY_LIFECYCLE_POLICY.md`
-- `docs/RISK_REGISTER.md`
-- `docs/SUPPLY_CHAIN_POLICY.md`
 - `docs/MERKLE_SECURITY_MODEL.md`
+- `docs/SUPPLY_CHAIN_POLICY.md`
+- `docs/RISK_REGISTER.md`
+- `docs/DEPENDENCY_RISK_ASSESSMENT.md`
 
-## 3. Required Technical Evidence
+## 4. Mandatory Technical Evidence
 
-Code and tests:
-- Hybrid signature verification tests
-- Temporal RBAC tests
-- Immutable log compact proof tests (`O(log n)`)
-- Merkle second-preimage/domain-separation tests
-- Zeroization tests and key lifecycle checks
-- Entropy runtime self-test coverage and fail-closed readiness behavior
+### 4.1 Code and Test Evidence
 
-Pipeline evidence:
-- Production-only gate workflow run logs
-- `cargo audit` and `cargo deny` reports
-- SBOM artifacts and checksums
-- Signature and provenance attestations
-- Reproducible build comparison report
+Required passing evidence:
+- Hybrid signature forge-rejection tests.
+- Temporal RBAC mission-window fail-closed tests.
+- Compact chain proof `O(log n)` verification tests.
+- Merkle domain-separation and second-preimage-resistance tests.
+- Zeroization tests for key lifecycle paths.
+- Entropy startup and runtime health-check tests.
 
-## 4. Control-to-Evidence Mapping
+Minimum command pack:
 
-- Cryptographic integrity:
-  - code: `crates/pqcrypto`, `crates/immutable-logging`
-  - docs: `CRYPTO_ARCHITECTURE.md`, `MERKLE_SECURITY_MODEL.md`
-  - pipeline: `production-gate.yml`
+```bash
+cargo fmt --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo check --workspace --locked
+cargo test -p rsrp-policy-dsl --locked
+cargo test -p rsrp-security-core --locked
+cargo test -p rsrp-pqcrypto --locked
+cargo test -p rsrp-immutable-ledger --locked
+cargo test -p rsrp-proof-engine --locked
+cargo test -p api-service --locked
+```
 
-- Access control and authorization:
-  - code: `crates/crypto-core`, `crates/proof-engine`
-  - docs: `THREAT_MODEL*.md`
-  - tests: temporal mission-window enforcement
+Production profile command pack:
 
-- Supply chain:
-  - policy: `deny.toml`, `SUPPLY_CHAIN_POLICY.md`
-  - pipeline: `production-gate.yml`, `sbom.yml`, `signing.yml`, `reproducible-build.yml`
+```bash
+cargo build -p rsrp-pqcrypto --release --locked --no-default-features --features production
+cargo test -p rsrp-pqcrypto --locked --no-default-features --features production --tests --no-run
+```
 
-## 5. Release Exit Criteria
+### 4.2 CI and Supply-Chain Evidence
 
-All conditions must be true:
-- Production profile builds pass (`rsrp-pqcrypto` with `production` feature).
-- No mock crypto in production dependency graph.
-- `cargo audit` and `cargo deny` gates pass according to policy.
-- SBOM generated and signed.
-- Release artifacts signed and provenance attached.
-- Compact chain proof verification tests pass.
+Required workflow evidence:
+- `.github/workflows/production-gate.yml`
+- `.github/workflows/sbom.yml`
+- `.github/workflows/signing.yml`
+- `.github/workflows/reproducible-build.yml`
 
-## 6. Auditor Hand-off Checklist
+Required outputs:
+- `cargo deny` and `cargo audit` reports.
+- SBOM artifact and checksum.
+- provenance attestation.
+- signed release artifact metadata.
+- reproducible build comparison result.
 
-- [ ] Security Target delivered
-- [ ] Threat model and attack scenarios delivered
-- [ ] Risk register updated with open items and owners
-- [ ] CI evidence (run IDs, logs, artifacts) exported
-- [ ] Supply-chain policy exceptions reviewed and dated
-- [ ] Final compliance statement approved by security owner
+## 5. Evidence Integrity Requirements
 
-## 7. Packaging Guidance
+Bundle integrity constraints:
+- every artifact must include release version and git commit SHA.
+- all checksums must be listed in `MANIFEST.sha256`.
+- bundle metadata must be signed (cosign or equivalent approved signer).
+- provenance subject digest must match release artifacts and SBOM digest.
 
-Recommended archive layout:
+Mismatch in any digest or signature is a release blocker.
+
+## 6. Packaging Layout
+
+Required archive layout:
 
 ```text
 certification-bundle/
@@ -84,7 +104,49 @@ certification-bundle/
   sbom/
   signatures/
   provenance/
+  manifests/
+    MANIFEST.sha256
+    RELEASE_METADATA.json
 ```
 
-Use immutable archive naming:
+Required archive naming:
 - `rsrp-certification-bundle-v<version>-<git-sha>.tar.gz`
+
+## 7. Hostile-Host Evidence Addendum
+
+For attacker model `AM-05` (container or VM compromise), include:
+- key rotation and revocation runbook execution proof.
+- incident containment and re-establishment checklist.
+- off-host evidence export confirmation.
+- post-incident trust-anchor revalidation record.
+
+Reference:
+- `docs/ASSUMPTIONS_REGISTER.md`
+- `docs/KEY_LIFECYCLE_POLICY.md`
+
+## 8. Release Rejection Criteria (Fail-Closed)
+
+Reject release if any condition is true:
+- production build does not pass.
+- mock backend appears in production feature graph.
+- one required test class is missing or failing.
+- `cargo deny` or `cargo audit` policy gates fail without approved exception record.
+- SBOM, provenance, or signature artifact is missing or invalid.
+- traceability links are stale against changed code anchors.
+- document versions are inconsistent across the bundle.
+
+## 9. Auditor Hand-off Checklist
+
+- [ ] Full document set exported at released commit SHA.
+- [ ] CI run IDs recorded for all required workflows.
+- [ ] Test command outputs archived.
+- [ ] SBOM/provenance/signature artifacts verified against manifest.
+- [ ] Risk acceptances reviewed, justified, and dated.
+- [ ] Final compliance sign-off recorded by security owner.
+
+## 10. Governance Rule
+
+Any release-criterion or evidence change requires updates in:
+- this file,
+- `docs/TRACEABILITY_MATRIX.md`,
+- `docs/SECURITY_TARGET.md` if security claims are affected.
