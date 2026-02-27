@@ -20,13 +20,31 @@ pub struct JwtAuthConfig {
 
 impl JwtAuthConfig {
     pub fn from_secret(secret: &str) -> Result<Arc<Self>, String> {
+        let audiences = csv_env("JWT_AUDIENCE").unwrap_or_else(|| vec!["rsrp-api".to_string()]);
+        let issuers = csv_env("JWT_ISSUER").unwrap_or_else(|| vec!["rsrp-auth".to_string()]);
+        Self::from_secret_with_claim_constraints(secret, Some(audiences), Some(issuers))
+    }
+
+    fn from_secret_with_claim_constraints(
+        secret: &str,
+        audiences: Option<Vec<String>>,
+        issuers: Option<Vec<String>>,
+    ) -> Result<Arc<Self>, String> {
         if secret.trim().is_empty() {
             return Err("JWT_SECRET is empty".to_string());
         }
 
         let mut validation = Validation::new(Algorithm::HS256);
         validation.validate_exp = true;
+        validation.validate_nbf = true;
         validation.required_spec_claims.insert("exp".to_string());
+        validation.required_spec_claims.insert("nbf".to_string());
+        if let Some(values) = audiences.as_ref() {
+            validation.set_audience(values);
+        }
+        if let Some(values) = issuers.as_ref() {
+            validation.set_issuer(values);
+        }
 
         Ok(Arc::new(Self {
             decoding_key: DecodingKey::from_secret(secret.as_bytes()),
@@ -35,11 +53,23 @@ impl JwtAuthConfig {
     }
 }
 
+fn csv_env(name: &str) -> Option<Vec<String>> {
+    let value = std::env::var(name).ok()?;
+    let items: Vec<String> = value
+        .split(',')
+        .map(|v| v.trim())
+        .filter(|v| !v.is_empty())
+        .map(ToString::to_string)
+        .collect();
+    (!items.is_empty()).then_some(items)
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct JwtClaims {
     pub sub: String,
     pub role: String,
     pub exp: usize,
+    pub nbf: Option<usize>,
     pub iat: Option<usize>,
     pub iss: Option<String>,
     pub aud: Option<String>,
@@ -138,4 +168,73 @@ pub async fn require_admin(
     next: Next,
 ) -> Response {
     enforce_role(state, request, next, RequiredRole::Admin).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use jsonwebtoken::{encode, EncodingKey, Header};
+
+    #[test]
+    fn jwt_rejects_token_without_nbf() {
+        #[derive(Serialize)]
+        struct ClaimsNoNbf {
+            sub: String,
+            role: String,
+            exp: usize,
+            iss: String,
+            aud: String,
+        }
+
+        let secret = "test-secret";
+        let config = JwtAuthConfig::from_secret_with_claim_constraints(
+            secret,
+            Some(vec!["rsrp-api".to_string()]),
+            Some(vec!["rsrp-auth".to_string()]),
+        )
+        .expect("config");
+        let claims = ClaimsNoNbf {
+            sub: "u1".to_string(),
+            role: "ADMIN".to_string(),
+            exp: 2_000_000_000,
+            iss: "rsrp-auth".to_string(),
+            aud: "rsrp-api".to_string(),
+        };
+        let token = encode(
+            &Header::new(Algorithm::HS256),
+            &claims,
+            &EncodingKey::from_secret(secret.as_bytes()),
+        )
+        .expect("token");
+
+        assert!(decode_claims(&config, &token).is_err());
+    }
+
+    #[test]
+    fn jwt_rejects_wrong_issuer_and_audience() {
+        let secret = "test-secret";
+        let config = JwtAuthConfig::from_secret_with_claim_constraints(
+            secret,
+            Some(vec!["rsrp-api".to_string()]),
+            Some(vec!["rsrp-auth".to_string()]),
+        )
+        .expect("config");
+        let claims = JwtClaims {
+            sub: "u1".to_string(),
+            role: "ADMIN".to_string(),
+            exp: 2_000_000_000,
+            nbf: Some(1),
+            iat: Some(1),
+            iss: Some("other-issuer".to_string()),
+            aud: Some("other-audience".to_string()),
+        };
+        let token = encode(
+            &Header::new(Algorithm::HS256),
+            &claims,
+            &EncodingKey::from_secret(secret.as_bytes()),
+        )
+        .expect("token");
+
+        assert!(decode_claims(&config, &token).is_err());
+    }
 }

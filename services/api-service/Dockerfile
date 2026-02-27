@@ -2,7 +2,7 @@
 # Production Hardened Version
 
 # ========== Build Stage ==========
-FROM rust:1.76-alpine AS builder
+FROM rust:1.76-alpine@sha256:e594a9705c4514c0e0b5ed2409f7ec34f20af09a33d242524281247b74196c43 AS builder
 
 # Install build dependencies
 RUN apk add --no-cache musl-dev openssl-dev
@@ -29,7 +29,7 @@ RUN RUSTFLAGS="-C target-cpu=native" cargo build --release --locked
 
 # ========== Runtime Stage ==========
 # Use distroless for minimal attack surface
-FROM gcr.io/distroless/cc:nonroot
+FROM gcr.io/distroless/cc:nonroot@sha256:26474572388bb8bcbf837002e07b3c068e31b053f0ed1865218fc1e25a7650f6
 
 WORKDIR /app
 

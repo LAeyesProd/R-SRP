@@ -139,9 +139,10 @@ impl HsmSession for SoftHsm {
 
 /// Create HSM session based on configuration
 pub fn create_hsm_session(config: &HsmConfig) -> Result<Box<dyn HsmSession>> {
-    if matches!(config.hsm_type, HsmType::SoftHSM) && is_production_environment() {
+    if matches!(config.hsm_type, HsmType::SoftHSM) && !is_soft_hsm_allowed() {
         return Err(CryptoError::HsmError(
-            "SoftHSM is forbidden in production environment".to_string(),
+            "SoftHSM is disabled by default. Set ALLOW_SOFTHSM=true to enable it explicitly."
+                .to_string(),
         ));
     }
     match config.hsm_type {
@@ -200,15 +201,14 @@ impl HsmSigner {
     }
 }
 
-fn is_production_environment() -> bool {
-    [
-        std::env::var("ENV").ok(),
-        std::env::var("APP_ENV").ok(),
-        std::env::var("RUST_ENV").ok(),
-    ]
-    .into_iter()
-    .flatten()
-    .any(|v| matches!(v.to_ascii_lowercase().as_str(), "prod" | "production"))
+fn is_soft_hsm_allowed() -> bool {
+    if cfg!(test) {
+        return true;
+    }
+    std::env::var("ALLOW_SOFTHSM")
+        .ok()
+        .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
