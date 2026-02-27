@@ -11,10 +11,11 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
+use ipnet::IpNet;
 use serde_json::json;
 use std::{
     collections::HashMap,
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -46,13 +47,20 @@ struct WindowBucket {
 pub struct IpRateLimiter {
     config: IpRateLimiterConfig,
     buckets: Mutex<HashMap<String, WindowBucket>>,
+    trusted_proxies: TrustedProxyConfig,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TrustedProxyConfig {
+    cidrs: Vec<IpNet>,
 }
 
 impl IpRateLimiter {
-    pub fn new(config: IpRateLimiterConfig) -> Arc<Self> {
+    pub fn new(config: IpRateLimiterConfig, trusted_proxies: TrustedProxyConfig) -> Arc<Self> {
         Arc::new(Self {
             config,
             buckets: Mutex::new(HashMap::new()),
+            trusted_proxies,
         })
     }
 
@@ -82,25 +90,84 @@ impl IpRateLimiter {
     }
 }
 
-fn client_key_from_request(headers: &HeaderMap, request: &Request) -> String {
-    let forwarded_for = HeaderName::from_static("x-forwarded-for");
-    if let Some(value) = headers.get(forwarded_for).and_then(|v| v.to_str().ok()) {
-        if let Some(first) = value.split(',').next() {
-            let ip = first.trim();
-            if !ip.is_empty() {
-                return format!("ip:{ip}");
+impl TrustedProxyConfig {
+    pub fn from_env() -> Self {
+        let raw = std::env::var("TRUSTED_PROXY_CIDRS").unwrap_or_default();
+        if raw.trim().is_empty() {
+            return Self { cidrs: Vec::new() };
+        }
+        let mut cidrs = Vec::new();
+        for part in raw.split(',').map(str::trim).filter(|v| !v.is_empty()) {
+            match part.parse::<IpNet>() {
+                Ok(net) => cidrs.push(net),
+                Err(err) => {
+                    tracing::warn!("Ignoring invalid TRUSTED_PROXY_CIDRS entry {part}: {err}")
+                }
             }
         }
+        Self { cidrs }
     }
 
-    if let Some(connect_info) = request
+    pub fn len(&self) -> usize {
+        self.cidrs.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.cidrs.is_empty()
+    }
+
+    pub fn contains(&self, ip: IpAddr) -> bool {
+        self.cidrs.iter().any(|net| net.contains(&ip))
+    }
+
+    #[cfg(test)]
+    fn from_cidrs(cidrs: Vec<IpNet>) -> Self {
+        Self { cidrs }
+    }
+}
+
+fn first_forwarded_ip(headers: &HeaderMap) -> Option<IpAddr> {
+    let forwarded_for = HeaderName::from_static("x-forwarded-for");
+    let value = headers.get(forwarded_for)?.to_str().ok()?;
+    let first = value.split(',').next()?.trim();
+    if first.is_empty() {
+        return None;
+    }
+    if let Ok(ip) = first.parse::<IpAddr>() {
+        return Some(ip);
+    }
+    if let Ok(sock) = first.parse::<SocketAddr>() {
+        return Some(sock.ip());
+    }
+    None
+}
+
+pub fn resolve_client_ip(
+    headers: &HeaderMap,
+    peer_ip: Option<IpAddr>,
+    trusted_proxies: &TrustedProxyConfig,
+) -> Option<String> {
+    let peer_ip = peer_ip?;
+    if trusted_proxies.contains(peer_ip) {
+        if let Some(forwarded) = first_forwarded_ip(headers) {
+            return Some(forwarded.to_string());
+        }
+    }
+    Some(peer_ip.to_string())
+}
+
+fn client_key_from_request(
+    headers: &HeaderMap,
+    request: &Request,
+    trusted_proxies: &TrustedProxyConfig,
+) -> String {
+    let peer_ip = request
         .extensions()
         .get::<axum::extract::ConnectInfo<SocketAddr>>()
-    {
-        return format!("ip:{}", connect_info.0.ip());
-    }
-
-    "ip:unknown".to_string()
+        .map(|connect_info| connect_info.0.ip());
+    let client_ip = resolve_client_ip(headers, peer_ip, trusted_proxies)
+        .unwrap_or_else(|| "unknown".to_string());
+    format!("ip:{client_ip}")
 }
 
 /// Per-IP rate limiting middleware.
@@ -109,7 +176,7 @@ pub async fn ip_rate_limit_middleware(
     request: Request,
     next: Next,
 ) -> Response {
-    let key = client_key_from_request(request.headers(), &request);
+    let key = client_key_from_request(request.headers(), &request, &rate_limiter.trusted_proxies);
     match rate_limiter.check_and_count(&key).await {
         Ok(()) => next.run(request).await,
         Err(retry_after_secs) => {
@@ -162,4 +229,33 @@ pub async fn request_id_middleware(mut request: Request, next: Next) -> Response
             .insert(HeaderName::from_static("x-request-id"), value);
     }
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resolve_client_ip_ignores_xff_when_proxy_untrusted() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HeaderName::from_static("x-forwarded-for"),
+            "198.51.100.7, 10.0.0.1".parse().unwrap(),
+        );
+        let trusted = TrustedProxyConfig::default();
+        let resolved = resolve_client_ip(&headers, Some("203.0.113.10".parse().unwrap()), &trusted);
+        assert_eq!(resolved.as_deref(), Some("203.0.113.10"));
+    }
+
+    #[test]
+    fn test_resolve_client_ip_uses_xff_when_proxy_trusted() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HeaderName::from_static("x-forwarded-for"),
+            "198.51.100.7, 10.0.0.1".parse().unwrap(),
+        );
+        let trusted = TrustedProxyConfig::from_cidrs(vec!["203.0.113.0/24".parse().unwrap()]);
+        let resolved = resolve_client_ip(&headers, Some("203.0.113.10".parse().unwrap()), &trusted);
+        assert_eq!(resolved.as_deref(), Some("198.51.100.7"));
+    }
 }

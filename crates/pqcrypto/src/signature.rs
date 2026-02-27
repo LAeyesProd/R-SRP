@@ -5,6 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
+#[cfg(feature = "mock-crypto")]
+use std::sync::Once;
 use zeroize::Zeroize;
 
 #[cfg(feature = "real-crypto")]
@@ -210,6 +212,17 @@ impl Dilithium {
         active_provider().verify(public_key, message, signature)
     }
 }
+
+#[cfg(feature = "mock-crypto")]
+fn warn_if_mock_backend() {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        tracing::warn!("PQ crypto mock backend active for Dilithium. Do not use in production.");
+    });
+}
+
+#[cfg(not(feature = "mock-crypto"))]
+fn warn_if_mock_backend() {}
 
 use crate::error::{PqcError, PqcResult};
 

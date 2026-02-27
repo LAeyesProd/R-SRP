@@ -2,6 +2,7 @@
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::Digest as _;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -28,10 +29,10 @@ pub struct DailyPublication {
 }
 
 impl DailyPublication {
-    /// Export as compact deterministic JSON bytes (struct-field-order based).
+    /// Export as canonical deterministic JSON bytes.
     pub fn to_canonical_json_bytes(&self) -> Result<Vec<u8>, crate::error::LogError> {
-        serde_json::to_vec(self)
-            .map_err(|e| crate::error::LogError::SerializationError(e.to_string()))
+        let canonical = canonical_publication_json_value(self)?;
+        canonical_json_bytes(&canonical)
     }
 
     /// Export as compact deterministic JSON string.
@@ -193,26 +194,29 @@ impl PublicationService {
 
         use sha2::{Digest, Sha256};
 
-        let mut current: Vec<String> = hashes.to_vec();
+        let mut current: Vec<Vec<u8>> = hashes.iter().map(|h| merkle_leaf_hash(h)).collect();
 
         while current.len() > 1 {
             let mut next = Vec::new();
 
             for chunk in current.chunks(2) {
-                if chunk.len() == 2 {
-                    let mut hasher = Sha256::new();
-                    hasher.update(chunk[0].as_bytes());
-                    hasher.update(chunk[1].as_bytes());
-                    next.push(format!("{:x}", hasher.finalize()));
+                let left = &chunk[0];
+                let right = if chunk.len() == 2 {
+                    &chunk[1]
                 } else {
-                    next.push(chunk[0].clone());
-                }
+                    &chunk[0]
+                };
+                let mut hasher = Sha256::new();
+                hasher.update([0x01]);
+                hasher.update(left);
+                hasher.update(right);
+                next.push(hasher.finalize().to_vec());
             }
 
             current = next;
         }
 
-        current[0].clone()
+        hex_encode(&current[0])
     }
 
     /// Sign publication
@@ -543,6 +547,104 @@ pub enum TsaError {
 fn base64_encode(data: &[u8]) -> String {
     use base64::{engine::general_purpose::STANDARD, Engine as _};
     STANDARD.encode(data)
+}
+
+fn canonical_publication_json_value(
+    publication: &DailyPublication,
+) -> Result<Value, crate::error::LogError> {
+    let signature = match publication.signature.as_ref() {
+        Some(sig) => serde_json::json!({
+            "algorithm": sig.algorithm,
+            "key_id": sig.key_id,
+            "value": sig.value,
+        }),
+        None => Value::Null,
+    };
+
+    let tsa_timestamp = match publication.tsa_timestamp.as_ref() {
+        Some(tsa) => serde_json::json!({
+            "timestamp": tsa.timestamp,
+            "token": tsa.token,
+            "tsa_url": tsa.tsa_url,
+        }),
+        None => Value::Null,
+    };
+
+    serde_json::from_value::<Value>(serde_json::json!({
+        "schema_version": "rsrp-daily-publication-v1",
+        "created_at": publication.created_at,
+        "date": publication.date,
+        "entry_count": publication.entry_count,
+        "hourly_roots": publication.hourly_roots,
+        "previous_day_root": publication.previous_day_root,
+        "root_hash": publication.root_hash,
+        "signature": signature,
+        "tsa_timestamp": tsa_timestamp,
+    }))
+    .map_err(|e| crate::error::LogError::SerializationError(e.to_string()))
+}
+
+fn canonical_json_bytes(value: &Value) -> Result<Vec<u8>, crate::error::LogError> {
+    let mut out = String::new();
+    write_canonical_json(value, &mut out)?;
+    Ok(out.into_bytes())
+}
+
+fn write_canonical_json(value: &Value, out: &mut String) -> Result<(), crate::error::LogError> {
+    match value {
+        Value::Null => out.push_str("null"),
+        Value::Bool(v) => out.push_str(if *v { "true" } else { "false" }),
+        Value::Number(v) => out.push_str(&v.to_string()),
+        Value::String(v) => {
+            let encoded = serde_json::to_string(v)
+                .map_err(|e| crate::error::LogError::SerializationError(e.to_string()))?;
+            out.push_str(&encoded);
+        }
+        Value::Array(values) => {
+            out.push('[');
+            for (i, entry) in values.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                write_canonical_json(entry, out)?;
+            }
+            out.push(']');
+        }
+        Value::Object(map) => {
+            let mut keys: Vec<&str> = map.keys().map(|k| k.as_str()).collect();
+            keys.sort_unstable();
+            out.push('{');
+            for (i, key) in keys.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                let encoded_key = serde_json::to_string(key)
+                    .map_err(|e| crate::error::LogError::SerializationError(e.to_string()))?;
+                out.push_str(&encoded_key);
+                out.push(':');
+                let value = map.get(*key).ok_or_else(|| {
+                    crate::error::LogError::SerializationError(
+                        "Missing canonical JSON key".to_string(),
+                    )
+                })?;
+                write_canonical_json(value, out)?;
+            }
+            out.push('}');
+        }
+    }
+    Ok(())
+}
+
+fn merkle_leaf_hash(input: &str) -> Vec<u8> {
+    let bytes = hex_decode(input).unwrap_or_else(|_| input.as_bytes().to_vec());
+    let mut hasher = sha2::Sha256::new();
+    hasher.update([0x00]);
+    hasher.update(&bytes);
+    hasher.finalize().to_vec()
+}
+
+fn hex_encode(data: &[u8]) -> String {
+    data.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
 fn hex_decode(s: &str) -> Result<Vec<u8>, String> {

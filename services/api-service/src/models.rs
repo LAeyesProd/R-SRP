@@ -53,6 +53,8 @@ pub struct ValidateParams {
     pub account_department: Option<String>,
     #[serde(default)]
     pub allowed_departments: Option<Vec<u32>>,
+    #[serde(default)]
+    pub legal_basis: Option<String>,
 }
 
 /// Validation request (POST)
@@ -84,6 +86,7 @@ pub struct ValidationRequest {
     pub account_department: Option<String>,
     #[serde(default)]
     pub allowed_departments: Option<Vec<u32>>,
+    pub legal_basis: String,
 }
 
 /// Validation response

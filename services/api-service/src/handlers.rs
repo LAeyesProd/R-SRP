@@ -12,6 +12,7 @@ use std::path::Path as FsPath;
 use std::sync::Arc;
 
 use crate::error::ApiError;
+use crate::middleware;
 use crate::models::*;
 use crate::AppState;
 use immutable_logging::log_entry::{
@@ -23,9 +24,19 @@ use immutable_logging::publication::{DailyPublication, TsaCmsVerifyError};
 
 /// Health check endpoint
 pub async fn health_check() -> Json<HealthResponse> {
+    let expose_version = cfg!(debug_assertions)
+        || std::env::var("HEALTH_EXPOSE_VERSION")
+            .ok()
+            .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(false);
+
     Json(HealthResponse {
         status: "healthy".to_string(),
-        version: "1.0.0".to_string(),
+        version: if expose_version {
+            "1.0.0".to_string()
+        } else {
+            "redacted".to_string()
+        },
         timestamp: chrono::Utc::now().to_rfc3339(),
     })
 }
@@ -56,8 +67,19 @@ pub async fn validate_access(
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
 ) -> Result<Json<ValidationResponse>, ApiError> {
+    validate_get_request(&params)?;
     tracing::debug!("Validating access for agent: {}", params.agent_id);
-    let ip_address = request_ip_from_headers(&headers, connect_info.as_ref());
+    let ip_address = middleware::resolve_client_ip(
+        &headers,
+        connect_info.as_ref().map(|ci| ci.0.ip()),
+        &state.trusted_proxies,
+    );
+    let legal_basis = derive_legal_basis(
+        params.legal_basis.as_deref(),
+        params.query_type.as_deref(),
+        params.mission_type.as_deref(),
+        Some(params.agent_org.as_str()),
+    )?;
     let user_agent = headers
         .get(USER_AGENT)
         .and_then(|v| v.to_str().ok())
@@ -85,7 +107,15 @@ pub async fn validate_access(
 
     let result = state.engine.evaluate(&request);
     state.record_validation_metrics(result.decision, result.evaluation_time_ms);
-    record_validation_decision_audit(&state, &request, &result, ip_address, user_agent).await;
+    record_validation_decision_audit(
+        &state,
+        &request,
+        &result,
+        ip_address,
+        user_agent,
+        legal_basis,
+    )
+    .await;
 
     Ok(Json(ValidationResponse {
         request_id: result.request_id,
@@ -106,8 +136,19 @@ pub async fn validate_access_post(
     connect_info: Option<ConnectInfo<SocketAddr>>,
     Json(payload): Json<ValidationRequest>,
 ) -> Result<Json<ValidationResponse>, ApiError> {
+    validate_post_request(&payload)?;
     tracing::debug!("Validating access for agent: {}", payload.agent_id);
-    let ip_address = request_ip_from_headers(&headers, connect_info.as_ref());
+    let ip_address = middleware::resolve_client_ip(
+        &headers,
+        connect_info.as_ref().map(|ci| ci.0.ip()),
+        &state.trusted_proxies,
+    );
+    let legal_basis = derive_legal_basis(
+        Some(payload.legal_basis.as_str()),
+        payload.query_type.as_deref(),
+        payload.mission_type.as_deref(),
+        Some(payload.agent_org.as_str()),
+    )?;
     let user_agent = headers
         .get(USER_AGENT)
         .and_then(|v| v.to_str().ok())
@@ -137,7 +178,15 @@ pub async fn validate_access_post(
 
     let result = state.engine.evaluate(&request);
     state.record_validation_metrics(result.decision, result.evaluation_time_ms);
-    record_validation_decision_audit(&state, &request, &result, ip_address, user_agent).await;
+    record_validation_decision_audit(
+        &state,
+        &request,
+        &result,
+        ip_address,
+        user_agent,
+        legal_basis,
+    )
+    .await;
 
     Ok(Json(ValidationResponse {
         request_id: result.request_id,
@@ -338,6 +387,22 @@ pub async fn publish_daily(
     })?;
 
     let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    match load_daily_publication_from_dir(dir, &date) {
+        Ok(_) => {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                format!("Daily publication already exists for date {date}"),
+            ));
+        }
+        Err(LoadPublicationError::NotFound(_)) => {}
+        Err(LoadPublicationError::Io(e)) | Err(LoadPublicationError::Parse(e)) => {
+            return Err(ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to check existing publication for {date}: {e}"),
+            ));
+        }
+    }
+
     let hourly_roots = state.logging.hourly_roots_snapshot().await;
     let filtered = hourly_root_hashes_for_date(&hourly_roots, &date);
     if filtered.is_empty() {
@@ -610,14 +675,208 @@ fn tsa_cms_verify_error_status(err: &TsaCmsVerifyError) -> String {
     }
 }
 
+const MAX_AGENT_ID_LEN: usize = 256;
+const MAX_AGENT_ORG_LEN: usize = 256;
+const MAX_AGENT_LEVEL_LEN: usize = 64;
+const MAX_MISSION_ID_LEN: usize = 256;
+const MAX_MISSION_TYPE_LEN: usize = 128;
+const MAX_QUERY_TYPE_LEN: usize = 128;
+const MAX_JUSTIFICATION_LEN: usize = 4096;
+const MAX_EXPORT_FORMAT_LEN: usize = 64;
+const MAX_ACCOUNT_DEPARTMENT_LEN: usize = 64;
+const MAX_ALLOWED_DEPARTMENTS: usize = 256;
+const MAX_LEGAL_BASIS_LEN: usize = 64;
+const LEGAL_BASIS_ALLOWED: [&str; 3] = ["LEGITIMATE_INTEREST", "PUBLIC_TASK", "LEGAL_OBLIGATION"];
+
+fn validate_required_field_len(name: &str, value: &str, max_len: usize) -> Result<(), ApiError> {
+    let len = value.chars().count();
+    if len == 0 {
+        return Err(ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!("{name} cannot be empty"),
+        ));
+    }
+    if len > max_len {
+        return Err(ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!("{name} exceeds maximum length ({max_len})"),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_optional_field_len(
+    name: &str,
+    value: Option<&str>,
+    max_len: usize,
+) -> Result<(), ApiError> {
+    if let Some(value) = value {
+        let len = value.chars().count();
+        if len > max_len {
+            return Err(ApiError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("{name} exceeds maximum length ({max_len})"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_allowed_departments_len(allowed_departments: Option<&[u32]>) -> Result<(), ApiError> {
+    if let Some(departments) = allowed_departments {
+        if departments.len() > MAX_ALLOWED_DEPARTMENTS {
+            return Err(ApiError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("allowed_departments exceeds maximum size ({MAX_ALLOWED_DEPARTMENTS})"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_get_request(params: &ValidateParams) -> Result<(), ApiError> {
+    validate_required_field_len("agent_id", &params.agent_id, MAX_AGENT_ID_LEN)?;
+    validate_required_field_len("agent_org", &params.agent_org, MAX_AGENT_ORG_LEN)?;
+    validate_optional_field_len(
+        "agent_level",
+        params.agent_level.as_deref(),
+        MAX_AGENT_LEVEL_LEN,
+    )?;
+    validate_optional_field_len(
+        "mission_id",
+        params.mission_id.as_deref(),
+        MAX_MISSION_ID_LEN,
+    )?;
+    validate_optional_field_len(
+        "mission_type",
+        params.mission_type.as_deref(),
+        MAX_MISSION_TYPE_LEN,
+    )?;
+    validate_optional_field_len(
+        "query_type",
+        params.query_type.as_deref(),
+        MAX_QUERY_TYPE_LEN,
+    )?;
+    validate_optional_field_len(
+        "justification",
+        params.justification.as_deref(),
+        MAX_JUSTIFICATION_LEN,
+    )?;
+    validate_optional_field_len(
+        "export_format",
+        params.export_format.as_deref(),
+        MAX_EXPORT_FORMAT_LEN,
+    )?;
+    validate_optional_field_len(
+        "account_department",
+        params.account_department.as_deref(),
+        MAX_ACCOUNT_DEPARTMENT_LEN,
+    )?;
+    validate_optional_field_len(
+        "legal_basis",
+        params.legal_basis.as_deref(),
+        MAX_LEGAL_BASIS_LEN,
+    )?;
+    validate_allowed_departments_len(params.allowed_departments.as_deref())?;
+    Ok(())
+}
+
+fn validate_post_request(payload: &ValidationRequest) -> Result<(), ApiError> {
+    validate_required_field_len("agent_id", &payload.agent_id, MAX_AGENT_ID_LEN)?;
+    validate_required_field_len("agent_org", &payload.agent_org, MAX_AGENT_ORG_LEN)?;
+    validate_optional_field_len(
+        "agent_level",
+        payload.agent_level.as_deref(),
+        MAX_AGENT_LEVEL_LEN,
+    )?;
+    validate_optional_field_len(
+        "mission_id",
+        payload.mission_id.as_deref(),
+        MAX_MISSION_ID_LEN,
+    )?;
+    validate_optional_field_len(
+        "mission_type",
+        payload.mission_type.as_deref(),
+        MAX_MISSION_TYPE_LEN,
+    )?;
+    validate_optional_field_len(
+        "query_type",
+        payload.query_type.as_deref(),
+        MAX_QUERY_TYPE_LEN,
+    )?;
+    validate_optional_field_len(
+        "justification",
+        payload.justification.as_deref(),
+        MAX_JUSTIFICATION_LEN,
+    )?;
+    validate_optional_field_len(
+        "export_format",
+        payload.export_format.as_deref(),
+        MAX_EXPORT_FORMAT_LEN,
+    )?;
+    validate_optional_field_len(
+        "account_department",
+        payload.account_department.as_deref(),
+        MAX_ACCOUNT_DEPARTMENT_LEN,
+    )?;
+    validate_required_field_len("legal_basis", &payload.legal_basis, MAX_LEGAL_BASIS_LEN)?;
+    validate_allowed_departments_len(payload.allowed_departments.as_deref())?;
+    Ok(())
+}
+
+fn normalize_legal_basis(value: &str) -> Result<String, ApiError> {
+    let normalized = value.trim().to_ascii_uppercase();
+    if LEGAL_BASIS_ALLOWED.contains(&normalized.as_str()) {
+        return Ok(normalized);
+    }
+    Err(ApiError::new(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "legal_basis must be one of: LEGITIMATE_INTEREST, PUBLIC_TASK, LEGAL_OBLIGATION",
+    ))
+}
+
+fn derive_legal_basis(
+    provided: Option<&str>,
+    query_type: Option<&str>,
+    mission_type: Option<&str>,
+    agent_org: Option<&str>,
+) -> Result<String, ApiError> {
+    if let Some(basis) = provided {
+        if !basis.trim().is_empty() {
+            return normalize_legal_basis(basis);
+        }
+    }
+
+    let query_type = query_type.unwrap_or_default().to_ascii_uppercase();
+    if query_type.contains("EXPORT") {
+        return Ok("LEGAL_OBLIGATION".to_string());
+    }
+
+    let mission_type = mission_type.unwrap_or_default().to_ascii_uppercase();
+    if mission_type.contains("PUBLIC")
+        || mission_type.contains("GOV")
+        || mission_type.contains("FISCAL")
+    {
+        return Ok("PUBLIC_TASK".to_string());
+    }
+
+    let agent_org = agent_org.unwrap_or_default().to_ascii_uppercase();
+    if agent_org.contains("DGFIP") || agent_org.contains("MINIST") || agent_org.contains("STATE") {
+        return Ok("PUBLIC_TASK".to_string());
+    }
+
+    Ok("LEGITIMATE_INTEREST".to_string())
+}
+
 async fn record_validation_decision_audit(
     state: &Arc<AppState>,
     request: &crue_engine::EvaluationRequest,
     result: &crue_engine::EvaluationResult,
     ip_address: Option<String>,
     user_agent: Option<String>,
+    legal_basis: String,
 ) {
-    let entry = match build_audit_log_entry(request, result, ip_address, user_agent) {
+    let entry = match build_audit_log_entry(request, result, ip_address, user_agent, &legal_basis) {
         Ok(e) => e,
         Err(err) => {
             tracing::warn!(
@@ -642,6 +901,7 @@ fn build_audit_log_entry(
     result: &crue_engine::EvaluationResult,
     ip_address: Option<String>,
     user_agent: Option<String>,
+    legal_basis: &str,
 ) -> Result<LogEntry, immutable_logging::error::LogError> {
     let event_type = match result.decision {
         crue_engine::decision::Decision::Allow => {
@@ -676,7 +936,7 @@ fn build_audit_log_entry(
         user_agent,
     })
     .compliance(Compliance {
-        legal_basis: "UNSPECIFIED".to_string(),
+        legal_basis: legal_basis.to_string(),
         retention_years: 10,
     })
     .decision(decision);
@@ -685,23 +945,6 @@ fn build_audit_log_entry(
     }
 
     builder.build()
-}
-
-fn request_ip_from_headers(
-    headers: &HeaderMap,
-    connect_info: Option<&ConnectInfo<SocketAddr>>,
-) -> Option<String> {
-    if let Some(value) = headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|raw| raw.split(',').next())
-        .map(str::trim)
-        .filter(|ip| !ip.is_empty())
-    {
-        return Some(value.to_string());
-    }
-
-    connect_info.map(|ci| ci.0.ip().to_string())
 }
 
 #[cfg(test)]
@@ -789,6 +1032,7 @@ mod tests {
             &result,
             Some("203.0.113.10".to_string()),
             Some("rsrp-test".to_string()),
+            "PUBLIC_TASK",
         )
         .unwrap();
         assert_eq!(entry.event_type(), EventType::RuleViolation);
@@ -803,14 +1047,32 @@ mod tests {
             entry_json["request"]["user_agent"].as_str(),
             Some("rsrp-test")
         );
+        assert_eq!(
+            entry_json["compliance"]["legal_basis"].as_str(),
+            Some("PUBLIC_TASK")
+        );
     }
 
     #[test]
-    fn test_request_ip_from_headers_prefers_forwarded_for() {
-        let mut headers = HeaderMap::new();
-        headers.insert("x-forwarded-for", "198.51.100.7, 10.0.0.1".parse().unwrap());
-        let ip = request_ip_from_headers(&headers, None);
-        assert_eq!(ip.as_deref(), Some("198.51.100.7"));
+    fn test_derive_legal_basis_mapping_and_validation() {
+        let derived = derive_legal_basis(None, Some("EXPORT_CSV"), Some("fiscal"), Some("DGFIP"))
+            .expect("derived");
+        assert_eq!(derived, "LEGAL_OBLIGATION");
+
+        let explicit =
+            derive_legal_basis(Some("public_task"), Some("QUERY"), Some("ops"), Some("org"))
+                .expect("explicit");
+        assert_eq!(explicit, "PUBLIC_TASK");
+
+        let err = derive_legal_basis(
+            Some("UNKNOWN_BASIS"),
+            Some("QUERY"),
+            Some("ops"),
+            Some("org"),
+        )
+        .expect_err("invalid basis");
+        let response = axum::response::IntoResponse::into_response(err);
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
 
     #[test]

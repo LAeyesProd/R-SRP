@@ -47,6 +47,7 @@ dependencies = [
  "axum-server",
  "base64",
  "chrono",
+ "ipnet",
  "jsonwebtoken",
  "reqwest",
  "rsrp-immutable-ledger",
@@ -1796,6 +1797,7 @@ dependencies = [
  "signature",
  "thiserror 1.0.69",
  "tokio",
+ "tracing",
  "x25519-dalek",
  "zeroize",
 ]
@@ -1832,8 +1834,10 @@ dependencies = [
  "serde_json",
  "sha2",
  "signature",
+ "subtle",
  "tempfile",
  "thiserror 1.0.69",
+ "tracing",
  "uuid",
  "zeroize",
 ]

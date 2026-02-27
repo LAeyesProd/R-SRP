@@ -16,7 +16,7 @@ use crate::signature::{
 };
 
 const X25519_PUBLIC_KEY_SIZE: usize = 32;
-const HYBRID_CLASSICAL_TAG_SIZE: usize = 16;
+const HYBRID_CLASSICAL_TAG_SIZE: usize = 32;
 const HYBRID_CLASSICAL_CIPHERTEXT_SIZE: usize = X25519_PUBLIC_KEY_SIZE + HYBRID_CLASSICAL_TAG_SIZE;
 
 /// Hybrid signature scheme: Ed25519 + Dilithium

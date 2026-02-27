@@ -5,6 +5,7 @@
 use crate::{CryptoError, KeyMetadata, Result};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
+use subtle::ConstantTimeEq;
 
 /// HSM configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -97,7 +98,7 @@ impl HsmSession for SoftHsm {
 
     fn verify(&mut self, key_handle: &HsmKeyHandle, data: &[u8], signature: &[u8]) -> Result<bool> {
         let computed = self.sign(key_handle, data)?;
-        Ok(computed == signature)
+        Ok(computed.as_slice().ct_eq(signature).into())
     }
 
     fn generate_key_pair(&mut self, algorithm: &str, key_id: &str) -> Result<HsmKeyHandle> {
