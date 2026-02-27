@@ -75,4 +75,5 @@ rand = "0.8"
 # Base64 encoding
 base64 = "0.22"
 oqs = { version = "0.11", optional = true, default-features = false, features = ["std", "ml_dsa", "ml_kem"] }
+tracing = "0.1"
 

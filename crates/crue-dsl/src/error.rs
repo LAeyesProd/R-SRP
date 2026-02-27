@@ -31,6 +31,9 @@ pub enum DslError {
 
     #[error("Bytecode error: {0}")]
     BytecodeError(String),
+
+    #[error("Rule too complex: {0}")]
+    RuleTooComplex(String),
 }
 
 impl serde::Serialize for DslError {

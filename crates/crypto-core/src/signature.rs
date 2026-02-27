@@ -112,10 +112,10 @@ impl Ed25519KeyPair {
                         )));
                     }
                     FipsMode::Enabled => {
-                        // Log warning but try fallback
-                        eprintln!(
-                            "WARNING: OS entropy unavailable, using fallback RNG (non-FIPS): {}",
-                            e
+                        tracing::warn!(
+                            event = "crypto.fips_fallback",
+                            error = %e,
+                            "OS entropy unavailable, using fallback RNG (non-FIPS)"
                         );
                         Self::generate_fallback()
                     }

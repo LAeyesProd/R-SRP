@@ -77,8 +77,21 @@ impl MerkleService {
 
     /// Hash entry data
     fn hash_entry(data: &[u8]) -> Vec<u8> {
+        Self::hash_leaf(data)
+    }
+
+    fn hash_leaf(data: &[u8]) -> Vec<u8> {
         let mut hasher = Sha256::new();
+        hasher.update([0x00]);
         hasher.update(data);
+        hasher.finalize().to_vec()
+    }
+
+    fn hash_node(left: &[u8], right: &[u8]) -> Vec<u8> {
+        let mut hasher = Sha256::new();
+        hasher.update([0x01]);
+        hasher.update(left);
+        hasher.update(right);
         hasher.finalize().to_vec()
     }
 
@@ -126,9 +139,7 @@ impl MerkleService {
             } else {
                 &chunk[0]
             };
-            let mut combined = left.clone();
-            combined.extend_from_slice(right);
-            next.push(Self::hash_entry(&combined));
+            next.push(Self::hash_node(left, right));
         }
         next
     }
@@ -227,19 +238,15 @@ pub fn verify_proof(proof: &MerkleProof) -> bool {
             Some(v) => v,
             None => return false,
         };
-        let mut combined = Vec::with_capacity(current.len() + sibling.len());
         match step.side.as_str() {
             "left" => {
-                combined.extend_from_slice(&sibling);
-                combined.extend_from_slice(&current);
+                current = MerkleService::hash_node(&sibling, &current);
             }
             "right" => {
-                combined.extend_from_slice(&current);
-                combined.extend_from_slice(&sibling);
+                current = MerkleService::hash_node(&current, &sibling);
             }
             _ => return false,
         }
-        current = MerkleService::hash_entry(&combined);
     }
 
     MerkleService::hex_encode(&current) == proof.root_hash

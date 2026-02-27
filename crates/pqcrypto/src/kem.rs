@@ -5,6 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
+#[cfg(feature = "mock-crypto")]
+use std::sync::Once;
 use zeroize::Zeroize;
 
 use crate::error::{PqcError, PqcResult};
@@ -137,6 +139,7 @@ impl Kyber {
     /// Create new Kyber context
     pub fn new(level: KyberLevel) -> Self {
         assert_backend_selected();
+        warn_if_mock_backend();
         crate::validate_runtime_security_config()
             .expect("production runtime security configuration validation failed");
         #[cfg(feature = "production")]
@@ -178,6 +181,17 @@ impl Kyber {
         active_provider().decapsulate(self.level, secret_key, ciphertext)
     }
 }
+
+#[cfg(feature = "mock-crypto")]
+fn warn_if_mock_backend() {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        tracing::warn!("PQ crypto mock backend active for Kyber. Do not use in production.");
+    });
+}
+
+#[cfg(not(feature = "mock-crypto"))]
+fn warn_if_mock_backend() {}
 
 fn assert_backend_selected() {
     #[cfg(all(not(debug_assertions), feature = "mock-crypto"))]

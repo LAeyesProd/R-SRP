@@ -24,13 +24,14 @@ base64 = "0.22"
 axum = "0.7"
 axum-server = { version = "0.7", features = ["tls-rustls"] }
 tower = { version = "0.4", features = ["util", "limit"] }
-tower-http = { version = "0.5", features = ["trace", "cors"] }
+tower-http = { version = "0.5", features = ["trace", "cors", "limit"] }
 tokio = { version = "1.35", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.7", features = ["v4", "serde"] }
 jsonwebtoken = "9.2"
+ipnet = "2.10"
 thiserror = "1.0"
 anyhow = "1.0"
 # mTLS support

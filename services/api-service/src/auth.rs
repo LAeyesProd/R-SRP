@@ -10,7 +10,7 @@ use axum::{
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::sync::Arc;
+use std::{env, fs, sync::Arc};
 
 #[derive(Clone)]
 pub struct JwtAuthConfig {
@@ -19,20 +19,87 @@ pub struct JwtAuthConfig {
 }
 
 impl JwtAuthConfig {
-    pub fn from_secret(secret: &str) -> Result<Arc<Self>, String> {
-        if secret.trim().is_empty() {
-            return Err("JWT_SECRET is empty".to_string());
-        }
+    pub fn from_env() -> Result<Arc<Self>, String> {
+        let issuer = required_env("JWT_ISSUER")?;
+        let audience = required_env("JWT_AUDIENCE")?;
+        let algorithm = parse_jwt_algorithm(
+            &env::var("JWT_ALGORITHM").unwrap_or_else(|_| "EdDSA".to_string()),
+        )?;
 
-        let mut validation = Validation::new(Algorithm::HS256);
-        validation.validate_exp = true;
-        validation.required_spec_claims.insert("exp".to_string());
+        let decoding_key = match algorithm {
+            Algorithm::HS256 => {
+                let secret = required_env("JWT_SECRET")?;
+                tracing::warn!(
+                    "JWT_ALGORITHM=HS256 configured. Prefer EdDSA/RS256 for zero-trust deployments."
+                );
+                DecodingKey::from_secret(secret.as_bytes())
+            }
+            Algorithm::RS256 => {
+                let pem = read_public_key_pem()?;
+                DecodingKey::from_rsa_pem(&pem).map_err(|e| e.to_string())?
+            }
+            Algorithm::EdDSA => {
+                let pem = read_public_key_pem()?;
+                DecodingKey::from_ed_pem(&pem).map_err(|e| e.to_string())?
+            }
+            other => {
+                return Err(format!(
+                    "Unsupported JWT_ALGORITHM={other:?}. Allowed: HS256, RS256, EdDSA"
+                ));
+            }
+        };
 
         Ok(Arc::new(Self {
-            decoding_key: DecodingKey::from_secret(secret.as_bytes()),
-            validation,
+            decoding_key,
+            validation: build_validation(algorithm, &issuer, &audience),
         }))
     }
+}
+
+fn required_env(name: &str) -> Result<String, String> {
+    let value = env::var(name).map_err(|_| format!("{name} is required"))?;
+    if value.trim().is_empty() {
+        return Err(format!("{name} is empty"));
+    }
+    Ok(value)
+}
+
+fn parse_jwt_algorithm(raw: &str) -> Result<Algorithm, String> {
+    match raw.trim().to_ascii_uppercase().as_str() {
+        "HS256" => Ok(Algorithm::HS256),
+        "RS256" => Ok(Algorithm::RS256),
+        "EDDSA" => Ok(Algorithm::EdDSA),
+        other => Err(format!("Unsupported JWT_ALGORITHM value: {other}")),
+    }
+}
+
+fn read_public_key_pem() -> Result<Vec<u8>, String> {
+    if let Ok(pem) = env::var("JWT_PUBLIC_KEY_PEM") {
+        if !pem.trim().is_empty() {
+            return Ok(pem.into_bytes());
+        }
+    }
+
+    let path = required_env("JWT_PUBLIC_KEY_PATH")?;
+    fs::read(&path).map_err(|e| format!("Failed to read JWT public key from {path}: {e}"))
+}
+
+fn build_validation(algorithm: Algorithm, issuer: &str, audience: &str) -> Validation {
+    let mut validation = Validation::new(algorithm);
+    validation.validate_exp = true;
+    validation.required_spec_claims.insert("exp".to_string());
+    validation.required_spec_claims.insert("iss".to_string());
+    validation.required_spec_claims.insert("aud".to_string());
+    validation.set_issuer(&[issuer]);
+    validation.set_audience(&[audience]);
+    validation
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum JwtAudience {
+    One(String),
+    Many(Vec<String>),
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -42,7 +109,7 @@ pub struct JwtClaims {
     pub exp: usize,
     pub iat: Option<usize>,
     pub iss: Option<String>,
-    pub aud: Option<String>,
+    pub aud: Option<JwtAudience>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

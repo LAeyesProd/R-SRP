@@ -33,6 +33,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tower_http::cors::CorsLayer;
+use tower_http::limit::RequestBodyLimitLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 struct AuditPublicationSignature {
@@ -154,6 +155,7 @@ struct AppState {
     audit_publication_signer: Option<Mutex<AuditPublicationSigner>>,
     audit_tsa_url: Option<String>,
     audit_tsa_trust_store_pem: Option<PathBuf>,
+    trusted_proxies: middleware::TrustedProxyConfig,
 }
 
 #[derive(Default)]
@@ -224,6 +226,17 @@ fn parse_bool_env(name: &str, default: bool) -> bool {
         .unwrap_or(default)
 }
 
+fn is_production_environment() -> bool {
+    [
+        std::env::var("ENV").ok(),
+        std::env::var("APP_ENV").ok(),
+        std::env::var("RUST_ENV").ok(),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|v| matches!(v.to_ascii_lowercase().as_str(), "prod" | "production"))
+}
+
 fn cors_layer_from_env() -> Result<CorsLayer, Box<dyn std::error::Error>> {
     let configured = std::env::var("CORS_ALLOWED_ORIGINS")
         .unwrap_or_else(|_| "http://localhost:3000,http://127.0.0.1:3000".to_string());
@@ -274,10 +287,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .into());
     }
-    let jwt_secret = std::env::var("JWT_SECRET").map_err(|_| {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, "JWT_SECRET is required")
-    })?;
-    let auth_config = auth::JwtAuthConfig::from_secret(&jwt_secret)
+    let auth_config = auth::JwtAuthConfig::from_env()
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
 
     // Initialize CRUE engine
@@ -419,11 +429,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "AUDIT_PUBLICATION_SIGNING_SECRET not configured; daily publications will be unsigned."
         );
     }
+
+    if audit_publication_signer
+        .as_ref()
+        .and_then(|m| m.try_lock().ok().map(|g| g.provider_name().to_string()))
+        .as_deref()
+        == Some("software-ed25519")
+    {
+        if is_production_environment() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "software-ed25519 signer is forbidden in production. Use AUDIT_PUBLICATION_SIGNING_PROVIDER=softhsm",
+            )
+            .into());
+        }
+        if !cfg!(debug_assertions) {
+            tracing::warn!(
+                "Audit publication signer uses software-ed25519. Prefer softhsm/HSM for non-development environments."
+            );
+        }
+    }
     if let Some(tsa_url) = &audit_tsa_url {
         tracing::info!("Audit TSA URL configured: {}", tsa_url);
     }
     if let Some(path) = &audit_tsa_trust_store_pem {
         tracing::info!("Audit TSA trust store configured: {}", path.display());
+    }
+
+    let trusted_proxies = middleware::TrustedProxyConfig::from_env();
+    if trusted_proxies.is_empty() {
+        tracing::warn!(
+            "TRUSTED_PROXY_CIDRS is empty; X-Forwarded-For will be ignored (direct peer IP only)."
+        );
+    } else {
+        tracing::info!(
+            "Trusted proxy CIDRs configured (count={})",
+            trusted_proxies.len()
+        );
     }
 
     let state = Arc::new(AppState {
@@ -435,9 +477,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         audit_publication_signer,
         audit_tsa_url,
         audit_tsa_trust_store_pem,
+        trusted_proxies: trusted_proxies.clone(),
     });
 
-    let rate_limiter = middleware::IpRateLimiter::new(middleware::IpRateLimiterConfig::default());
+    let rate_limiter =
+        middleware::IpRateLimiter::new(middleware::IpRateLimiterConfig::default(), trusted_proxies);
+    if is_production_environment() {
+        tracing::warn!(
+            "Using in-memory rate limiter. Deploy a distributed backend (e.g., Redis) for multi-replica production."
+        );
+    }
     let cors = cors_layer_from_env()?;
 
     // Build protected API routers
@@ -474,6 +523,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .merge(audit_read_routes)
         .merge(audit_admin_routes)
         .merge(metrics_routes)
+        .layer(RequestBodyLimitLayer::new(64 * 1024))
         .layer(from_fn_with_state(
             rate_limiter.clone(),
             middleware::ip_rate_limit_middleware,

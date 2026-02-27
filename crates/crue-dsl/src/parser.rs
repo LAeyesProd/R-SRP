@@ -5,6 +5,9 @@
 use crate::ast::*;
 use crate::error::{DslError, Result};
 
+const MAX_TOKEN_COUNT: usize = 10_000;
+const MAX_PARSE_DEPTH: usize = 128;
+
 /// CRUE DSL Parser
 pub struct Parser {
     tokens: Vec<Token>,
@@ -52,16 +55,16 @@ enum Token {
 
 impl Parser {
     /// Create a new parser with source code
-    pub fn new(source: &str) -> Self {
-        let tokens = Self::tokenize(source);
-        Parser {
+    pub fn new(source: &str) -> Result<Self> {
+        let tokens = Self::tokenize(source)?;
+        Ok(Parser {
             tokens,
             position: 0,
-        }
+        })
     }
 
     /// Tokenize source code
-    fn tokenize(source: &str) -> Vec<Token> {
+    fn tokenize(source: &str) -> Result<Vec<Token>> {
         let mut tokens = Vec::new();
         let mut chars = source.chars().peekable();
 
@@ -119,6 +122,7 @@ impl Parser {
                     "FALSE" => Token::Identifier("false".to_string()),
                     _ => Token::Identifier(ident),
                 });
+                Self::ensure_token_budget(tokens.len())?;
                 continue;
             }
 
@@ -139,6 +143,7 @@ impl Parser {
                     Ok(v) => tokens.push(Token::Number(v)),
                     Err(_) => tokens.push(Token::InvalidNumber(num)),
                 }
+                Self::ensure_token_budget(tokens.len())?;
                 continue;
             }
 
@@ -158,6 +163,7 @@ impl Parser {
                     }
                 }
                 tokens.push(Token::String(s));
+                Self::ensure_token_budget(tokens.len())?;
                 continue;
             }
 
@@ -199,10 +205,30 @@ impl Parser {
                 }
                 _ => {}
             }
+            Self::ensure_token_budget(tokens.len())?;
         }
 
         tokens.push(Token::Eof);
-        tokens
+        Self::ensure_token_budget(tokens.len())?;
+        Ok(tokens)
+    }
+
+    fn ensure_token_budget(token_count: usize) -> Result<()> {
+        if token_count > MAX_TOKEN_COUNT {
+            return Err(DslError::RuleTooComplex(format!(
+                "token count exceeds limit ({MAX_TOKEN_COUNT})"
+            )));
+        }
+        Ok(())
+    }
+
+    fn ensure_depth(depth: usize) -> Result<()> {
+        if depth > MAX_PARSE_DEPTH {
+            return Err(DslError::RuleTooComplex(format!(
+                "expression depth exceeds limit ({MAX_PARSE_DEPTH})"
+            )));
+        }
+        Ok(())
     }
 
     /// Parse the source into an AST
@@ -306,15 +332,16 @@ impl Parser {
 
     /// Parse expressions (recursive descent)
     fn parse_expression(&mut self) -> Result<Expression> {
-        self.parse_or_expr()
+        self.parse_or_expr(0)
     }
 
     /// Parse OR expressions
-    fn parse_or_expr(&mut self) -> Result<Expression> {
-        let mut left = self.parse_and_expr()?;
+    fn parse_or_expr(&mut self, depth: usize) -> Result<Expression> {
+        Self::ensure_depth(depth)?;
+        let mut left = self.parse_and_expr(depth + 1)?;
 
         while self.match_token(Token::Or) {
-            let right = self.parse_and_expr()?;
+            let right = self.parse_and_expr(depth + 1)?;
             left = Expression::Or(Box::new(left), Box::new(right));
         }
 
@@ -322,11 +349,12 @@ impl Parser {
     }
 
     /// Parse AND expressions
-    fn parse_and_expr(&mut self) -> Result<Expression> {
-        let mut left = self.parse_not_expr()?;
+    fn parse_and_expr(&mut self, depth: usize) -> Result<Expression> {
+        Self::ensure_depth(depth)?;
+        let mut left = self.parse_not_expr(depth + 1)?;
 
         while self.match_token(Token::And) {
-            let right = self.parse_not_expr()?;
+            let right = self.parse_not_expr(depth + 1)?;
             left = Expression::And(Box::new(left), Box::new(right));
         }
 
@@ -334,47 +362,49 @@ impl Parser {
     }
 
     /// Parse NOT expressions
-    fn parse_not_expr(&mut self) -> Result<Expression> {
+    fn parse_not_expr(&mut self, depth: usize) -> Result<Expression> {
+        Self::ensure_depth(depth)?;
         if self.match_token(Token::Not) {
-            let expr = self.parse_not_expr()?;
+            let expr = self.parse_not_expr(depth + 1)?;
             return Ok(Expression::Not(Box::new(expr)));
         }
-        self.parse_comparison_expr()
+        self.parse_comparison_expr(depth + 1)
     }
 
     /// Parse comparison expressions
-    fn parse_comparison_expr(&mut self) -> Result<Expression> {
-        let left = self.parse_primary_expr()?;
+    fn parse_comparison_expr(&mut self, depth: usize) -> Result<Expression> {
+        Self::ensure_depth(depth)?;
+        let left = self.parse_primary_expr(depth + 1)?;
 
         // Check for comparison operators
         if let Token::Gt = self.peek() {
             self.next();
-            let right = self.parse_primary_expr()?;
+            let right = self.parse_primary_expr(depth + 1)?;
             return Ok(Expression::Gt(Box::new(left), Box::new(right)));
         }
         if let Token::Lt = self.peek() {
             self.next();
-            let right = self.parse_primary_expr()?;
+            let right = self.parse_primary_expr(depth + 1)?;
             return Ok(Expression::Lt(Box::new(left), Box::new(right)));
         }
         if let Token::Gte = self.peek() {
             self.next();
-            let right = self.parse_primary_expr()?;
+            let right = self.parse_primary_expr(depth + 1)?;
             return Ok(Expression::Gte(Box::new(left), Box::new(right)));
         }
         if let Token::Lte = self.peek() {
             self.next();
-            let right = self.parse_primary_expr()?;
+            let right = self.parse_primary_expr(depth + 1)?;
             return Ok(Expression::Lte(Box::new(left), Box::new(right)));
         }
         if let Token::Eq = self.peek() {
             self.next();
-            let right = self.parse_primary_expr()?;
+            let right = self.parse_primary_expr(depth + 1)?;
             return Ok(Expression::Eq(Box::new(left), Box::new(right)));
         }
         if let Token::Neq = self.peek() {
             self.next();
-            let right = self.parse_primary_expr()?;
+            let right = self.parse_primary_expr(depth + 1)?;
             return Ok(Expression::Neq(Box::new(left), Box::new(right)));
         }
 
@@ -382,7 +412,8 @@ impl Parser {
     }
 
     /// Parse primary expressions
-    fn parse_primary_expr(&mut self) -> Result<Expression> {
+    fn parse_primary_expr(&mut self, depth: usize) -> Result<Expression> {
+        Self::ensure_depth(depth)?;
         let token = self.next();
 
         match token {
@@ -412,7 +443,7 @@ impl Parser {
             }
             Token::String(s) => Ok(Expression::Value(Value::String(s))),
             Token::ParenOpen => {
-                let expr = self.parse_expression()?;
+                let expr = self.parse_or_expr(depth + 1)?;
                 self.expect(Token::ParenClose)?;
                 Ok(expr)
             }
@@ -493,7 +524,7 @@ impl Parser {
 
 /// Parse CRUE DSL source code
 pub fn parse(source: &str) -> Result<RuleAst> {
-    let mut parser = Parser::new(source);
+    let mut parser = Parser::new(source)?;
     parser.parse()
 }
 
@@ -503,7 +534,7 @@ mod tests {
 
     #[test]
     fn test_tokenize() {
-        let tokens = Parser::tokenize("RULE CRUE_001 VERSION 1.0");
+        let tokens = Parser::tokenize("RULE CRUE_001 VERSION 1.0").unwrap();
         assert!(tokens.contains(&Token::Rule));
         assert!(tokens.contains(&Token::Identifier("CRUE_001".to_string())));
     }
