@@ -1,7 +1,7 @@
-# SBOM Generation Workflow for R-SRP Ultra
-# Generates Software Bill of Materials in SPDX format
+# SBOM workflow for RSRP
+# Generates CycloneDX SBOM, signs it with keyless Cosign, and publishes artifacts.
 
-name: SBOM Generation
+name: SBOM
 
 on:
   push:
@@ -10,132 +10,87 @@ on:
     branches: [main]
   release:
     types: [published]
+  workflow_dispatch:
   schedule:
-    # Weekly SBOM update for vulnerabilities
-    - cron: '0 0 * * 0'
+    - cron: "0 3 * * 0"
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  generate-sbom:
-    name: Generate SBOM (SPDX)
+  sbom:
+    name: Generate and Sign CycloneDX SBOM
     runs-on: ubuntu-latest
     permissions:
-      contents: read
-      security-events: write
-    
+      contents: write
+      id-token: write
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-      
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libssl-dev \
-            pkg-config \
-            curl \
-            jq
-      
-      # Generate cargo-audit for dependency vulnerabilities
-      - name: Install cargo-audit
-        run: cargo install cargo-audit
-      
-      - name: Install cargo-sbom
-        run: cargo install cargo-sbom
-      
-      - name: Generate SBOM
-        run: |
-          # Generate SPDX SBOM
-          cargo sbom --format spdx-rdf --output sbom.spdx.rdf
-          cargo sbom --format spdx-json --output sbom.spdx.json
-          
-          # Generate CycloneDX SBOM
-          cargo sbom --format cyclonedx-json --output sbom.cdx.json
-      
-      - name: Run security audit
-        run: |
-          cargo audit --json > audit-report.json || true
-          cargo audit --deny warnings || true
-      
-      - name: Upload SBOM to GitHub
-        uses: actions/upload-artifact@v4
-        with:
-          name: sbom-reports
-          path: |
-            sbom.spdx.rdf
-            sbom.spdx.json
-            sbom.cdx.json
-            audit-report.json
-          retention-days: 90
-      
-      # Upload to GitHub Security tab
-      - name: Upload to Security tab
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        with:
-          sarif_file: audit-report.json
-          category: "/language:rust"
-      
-      # Check for vulnerabilities
-      - name: Check for vulnerabilities
-        run: |
-          if [ -f audit-report.json ]; then
-            VULNS=$(jq '.vulnerabilities | length' audit-report.json 2>/dev/null || echo "0")
-            if [ "$VULNS" -gt "0" ]; then
-              echo "⚠️ Found $VULNS vulnerabilities in dependencies!"
-              jq '.vulnerabilities[] | "\(.advisory.id): \(.advisory.title)"' audit-report.json
-              exit 1
-            fi
-          fi
-      
-      # Create attestation (SLSA)
-      - name: Create SBOM attestation
-        run: |
-          cat > sbom-attestation.json << 'EOF'
-          {
-            "_type": "https://in-toto.io/Statement/v0.1",
-            "predicateType": "https://spdx.dev/Document/v2.3",
-            "subject": [{
-              "name": "rsrp-ultra",
-              "digest": {"sha256": "${GITHUB_SHA}"}
-            }],
-            "predicate": {
-              "spdxVersion": "SPDX-2.3",
-              "dataLicense": "CC0-1.0",
-              "SPDXID": "SPDXRef-PACKAGE",
-              "name": "R-SRP-Ultra",
-              "documentNamespace": "https://rsrp.ultra/security/sbom"
-            }
-          }
-          EOF
-      
-      - name: Upload SBOM attestation
-        uses: actions/upload-artifact@v4
-        with:
-          name: sbom-attestation
-          path: sbom-attestation.json
 
-  dependency-review:
-    name: Dependency Review
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      
-      - name: Dependency Review
-        uses: actions/dependency-review-action@v4
+      - name: Prefetch dependencies
+        run: cargo fetch --locked
+
+      - name: Install cargo-cyclonedx
+        run: cargo install cargo-cyclonedx --locked
+
+      - name: Generate CycloneDX SBOM
+        run: |
+          cargo cyclonedx --manifest-path Cargo.toml --workspace --all-features --format json
+          mkdir -p sbom
+          find . -type f \( -name "*.cdx.json" -o -name "bom.json" -o -name "*.bom.json" \) \
+            -not -path "./target/*" \
+            -exec cp --parents {} sbom/ \;
+          test -n "$(find sbom -type f)"
+
+      - name: Archive SBOM bundle
+        run: |
+          ARCHIVE="rsrp-sbom-${GITHUB_SHA}.tar.gz"
+          tar -czf "${ARCHIVE}" -C sbom .
+          sha256sum "${ARCHIVE}" > "${ARCHIVE}.sha256"
+          echo "SBOM_ARCHIVE=${ARCHIVE}" >> "${GITHUB_ENV}"
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3.7.0
+
+      - name: Sign SBOM bundle (keyless)
+        run: |
+          cosign sign-blob --yes \
+            --output-signature "${SBOM_ARCHIVE}.sig" \
+            --output-certificate "${SBOM_ARCHIVE}.pem" \
+            "${SBOM_ARCHIVE}"
+
+      - name: Verify SBOM signature
+        run: |
+          cosign verify-blob \
+            --certificate "${SBOM_ARCHIVE}.pem" \
+            --signature "${SBOM_ARCHIVE}.sig" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --certificate-identity-regexp "https://github.com/${{ github.repository }}/.github/workflows/sbom.yml@.*" \
+            "${SBOM_ARCHIVE}"
+
+      - name: Upload signed SBOM artifacts
+        uses: actions/upload-artifact@v4
         with:
-          comment-summary-in-pr: always
-          fail-on-severity: moderate
-         许可证白名单: EUPL-1.2
+          name: signed-sbom-${{ github.sha }}
+          path: |
+            sbom/**
+            ${{ env.SBOM_ARCHIVE }}
+            ${{ env.SBOM_ARCHIVE }}.sha256
+            ${{ env.SBOM_ARCHIVE }}.sig
+            ${{ env.SBOM_ARCHIVE }}.pem
+          retention-days: 90
+
+      - name: Publish SBOM assets on release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ env.SBOM_ARCHIVE }}
+            ${{ env.SBOM_ARCHIVE }}.sha256
+            ${{ env.SBOM_ARCHIVE }}.sig
+            ${{ env.SBOM_ARCHIVE }}.pem

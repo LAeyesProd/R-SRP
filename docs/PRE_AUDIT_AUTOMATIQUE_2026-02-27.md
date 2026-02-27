@@ -68,6 +68,22 @@ Contexte: verification technique avant audit externe.
 - Corrections `clippy -D warnings` appliquees (`derive(Default)`, `is_multiple_of`, `div_ceil`, `len/is_empty`, `io::Error::other`, `large_enum_variant`, etc.)
 - Resultat: clippy strict `PASS` sur tout le workspace
 
+7. CI `real-crypto` Linux obligatoire
+- Ajout d'un job dedie dans `.github/workflows/reproducible-build.yml`
+- Install deps: `cmake`, `clang`, `llvm-dev`, `libclang-dev`
+- Build gate: `cargo check -p rsrp-pqcrypto --release --no-default-features --features real-crypto`
+
+8. SBOM signe
+- Workflow remanie `.github/workflows/sbom.yml`
+- Generation CycloneDX (`cargo-cyclonedx`)
+- Archive + hash + signature keyless Cosign (OIDC)
+- Verification de signature en CI
+- Publication des artefacts signes (et assets release sur event `release`)
+
+9. Threat model STRIDE formel
+- Nouveau document: `docs/THREAT_MODEL_STRIDE.md`
+- Contient: trust boundaries, assets, attack vectors STRIDE, abuse cases, mitigations, risques residuels
+
 ## Priorites avant audit externe
 ### P0 (bloquant audit)
 1. Outiller machine CI/local pour `real-crypto`:
@@ -79,7 +95,8 @@ Contexte: verification technique avant audit externe.
 ### P1
 1. Ajouter job Go interop et Terraform validate dans CI (ou documenter exclusion)
 2. Reduire les warnings `cargo-deny` non bloquants (duplicates lockfile/allow-list non rencontree)
+3. Finaliser verification operationnelle du workflow SBOM sur release publique (assets + verification externe)
 
 ## Verdict pre-audit
-- Niveau actuel: **pre-audit technique solide** (tests + clippy strict + audit vuln + deny passent).
-- Bloquants restants pour audit externe: **validation `real-crypto` OQS** sur environnement outille et resolution/suivi de la dependance transitive unmaintained `rustls-pemfile`.
+- Niveau actuel: **pre-audit technique solide** (tests + clippy strict + audit vuln + deny passent, CI `real-crypto` et SBOM signe en place, STRIDE formel documente).
+- Bloquants restants pour audit externe: **validation `real-crypto` OQS** sur tous environnements cibles et resolution/suivi de la dependance transitive unmaintained `rustls-pemfile`.
