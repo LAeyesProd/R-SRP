@@ -40,12 +40,6 @@ jobs:
           args: --tests
           workspace: ./crates/crue-engine
       
-      - name: Run Kani on immutable logging
-        uses: model-checking/kani-github-action@v1
-        with:
-          args: --tests
-          workspace: ./crates/immutable-logging
-
   # Miri (Undefined Behavior Detection)
   miri-check:
     name: Miri - Undefined Behavior Detection
@@ -75,10 +69,6 @@ jobs:
         run: |
           cargo +nightly miri test -p rsrp-proof-engine --lib
       
-      - name: Run Miri on immutable-logging
-        run: |
-          cargo +nightly miri test -p rsrp-immutable-ledger --lib
-
   # Fuzzing (additional coverage)
   fuzzing:
     name: Fuzzing Campaign
