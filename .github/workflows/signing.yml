@@ -26,6 +26,7 @@ env:
 jobs:
   build-and-sign:
     name: Build, Sign & Verify Container Image
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -79,7 +80,7 @@ jobs:
           IMAGE_URL: "${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
         run: |
           # Keyless signing with OIDC (no static keys)
-          cosign sign --yes --keyless $
+          cosign sign --yes --keyless $IMAGE_URL
           
           # Also sign with KMS for additional security (optional)
           # cosign sign --key kms://key:///rsrp-ultra/signing-key $IMAGE_URL
