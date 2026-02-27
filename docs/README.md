@@ -217,3 +217,9 @@ Pour toute question sur cette architecture :
 
 *Document g√©n√©r√© pour le projet de modernisation du Registre National des Comptes Bancaires*
 *Version: 1.0 | Date: 2026-02-23 | Classification: Usage Interne*
+
+---
+
+## Hardening and Pre-Certification
+
+- Roadmap logique de hardening, conformitÈ et prÈ-certification: [`ROADMAP_HARDENING.md`](ROADMAP_HARDENING.md)

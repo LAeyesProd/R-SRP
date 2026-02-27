@@ -1,0 +1,134 @@
+name: Production Gate
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  production-profile:
+    name: Enforce Production Crypto Profile
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install OQS toolchain (bindgen/cmake)
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake \
+            clang-14 \
+            llvm-14-dev \
+            libclang-14-dev \
+            pkg-config
+          test -f /usr/lib/llvm-14/lib/libclang.so
+          echo "LIBCLANG_PATH=/usr/lib/llvm-14/lib" >> "$GITHUB_ENV"
+
+      - name: Lockfile sync check
+        run: cargo fetch --locked
+
+      - name: Ensure no mock backend in production feature graph
+        run: |
+          set -euo pipefail
+          cargo tree --manifest-path rsrp-demo/Cargo.toml -e features --features production > feature-tree.txt
+          if grep -E "mock-crypto" feature-tree.txt; then
+            echo "mock-crypto detected in production graph"
+            exit 1
+          fi
+
+      - name: Build rsrp-demo in production mode
+        run: |
+          set -euo pipefail
+          cargo build \
+            --manifest-path rsrp-demo/Cargo.toml \
+            --release \
+            --locked \
+            --no-default-features \
+            --features production
+
+      - name: Test rsrp-pqcrypto in production mode
+        run: |
+          set -euo pipefail
+          cargo test \
+            -p rsrp-pqcrypto \
+            --locked \
+            --no-default-features \
+            --features production \
+            --tests
+
+  supply-chain-gate:
+    name: Enforce Supply-Chain Policy
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install jq
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y jq
+
+      - name: Lockfile sync check
+        run: cargo fetch --locked
+
+      - name: Install policy tools
+        run: |
+          set -euo pipefail
+          cargo install cargo-deny --locked
+          cargo install cargo-audit --locked
+
+      - name: Enforce cargo-deny policy
+        run: |
+          set -euo pipefail
+          cargo deny check advisories bans licenses sources
+
+      - name: Enforce cargo-audit policy
+        run: |
+          set -euo pipefail
+          cargo audit --deny warnings --ignore RUSTSEC-2025-0134
+
+      - name: Reject non-crates.io dependency sources
+        run: |
+          set -euo pipefail
+          cargo metadata --format-version=1 --locked > metadata.json
+          if jq -r '.packages[] | select(.source != null) | .source' metadata.json | grep -E '^git\+'; then
+            echo "git dependencies are forbidden by policy"
+            exit 1
+          fi
+
+      - name: Generate CycloneDX SBOM (gating)
+        run: |
+          set -euo pipefail
+          cargo install cargo-cyclonedx --locked
+          cargo cyclonedx --manifest-path Cargo.toml --all --all-features --format json
+          find . -type f \( -name "*.cdx.json" -o -name "bom.json" -o -name "*.bom.json" \) -not -path "./target/*" -print > sbom-files.txt
+          test -s sbom-files.txt
+
+      - name: Upload gate artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-gate-artifacts
+          path: |
+            metadata.json
+            sbom-files.txt
+          retention-days: 30
