@@ -60,7 +60,24 @@ cargo test -p rsrp-proof-engine --locked
 cargo test -p api-service --locked
 ```
 
-Production profile command pack:
+## 3. Required Technical Evidence
+
+Code and tests:
+- Hybrid signature verification tests
+- Temporal RBAC tests
+- Immutable log compact proof tests (`O(log n)`)
+- Merkle second-preimage/domain-separation tests
+- Zeroization tests and key lifecycle checks
+- Entropy runtime self-test coverage and fail-closed readiness behavior
+
+Pipeline evidence:
+- Production-only gate workflow run logs
+- `cargo audit` and `cargo deny` reports
+- SBOM artifacts and checksums
+- Signature and provenance attestations
+- Reproducible build comparison report
+
+## 4. Control-to-Evidence Mapping
 
 ```bash
 cargo build -p rsrp-pqcrypto --release --locked --no-default-features --features production
