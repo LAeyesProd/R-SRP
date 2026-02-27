@@ -84,6 +84,10 @@ Contexte: verification technique avant audit externe.
 - Nouveau document: `docs/THREAT_MODEL_STRIDE.md`
 - Contient: trust boundaries, assets, attack vectors STRIDE, abuse cases, mitigations, risques residuels
 
+10. Evaluation risque dependances
+- Nouveau document: `docs/DEPENDENCY_RISK_ASSESSMENT.md`
+- Couvre le risque transitive `rustls-pemfile` (`RUSTSEC-2025-0134`) avec controles compensatoires et plan de sortie
+
 ## Priorites avant audit externe
 ### P0 (bloquant audit)
 1. Outiller machine CI/local pour `real-crypto`:
