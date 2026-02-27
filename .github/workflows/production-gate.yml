@@ -144,16 +144,28 @@ jobs:
       - name: Lockfile sync check
         run: cargo fetch --locked
 
+      - name: Cache policy tools
+        id: cache-policy-tools
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/cargo-deny
+            ~/.cargo/bin/cargo-audit
+            ~/.cargo/.crates2.json
+            ~/.cargo/.crates.toml
+          key: ${{ runner.os }}-cargo-policy-tools-v1-deny0.19.0-audit0.22.1
+
       - name: Install policy tools
+        if: steps.cache-policy-tools.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           cargo install cargo-deny --version 0.19.0 --locked
-          cargo install cargo-audit --locked
+          cargo install cargo-audit --version 0.22.1 --locked
 
       - name: Enforce cargo-deny policy
         run: |
           set -euo pipefail
-          cargo deny check advisories bans licenses sources
+          cargo deny check advisories bans licenses sources --hide-inclusion-graph
 
       - name: Enforce cargo-audit policy
         run: |

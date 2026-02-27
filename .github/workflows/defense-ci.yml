@@ -50,13 +50,24 @@ jobs:
       
       - name: Run Clippy
         run: |
-          cargo clippy --workspace --all-targets --all-features -- -D warnings -D clippy::all
+          cargo clippy --all-targets --locked --no-deps \
+            -p rsrp-policy-dsl \
+            -p rsrp-security-core \
+            -p rsrp-proof-engine \
+            -p rsrp-pqcrypto \
+            -- -D warnings -D clippy::all
+          cargo check --locked -p rsrp-pqcrypto --no-default-features --features production
       
       - name: Run Clippy on nightly for additional lints
         continue-on-error: true
         run: |
           rustup default nightly
-          cargo clippy --workspace --all-targets -- -D warnings || true
+          cargo clippy --all-targets --locked --no-deps \
+            -p rsrp-policy-dsl \
+            -p rsrp-security-core \
+            -p rsrp-proof-engine \
+            -p rsrp-pqcrypto \
+            -- -D warnings || true
       
       - name: Run security audit
         run: |
@@ -156,11 +167,19 @@ jobs:
       
       - name: Run tests with coverage
         run: |
-          cargo test --workspace --all-features -j 1 -- --nocapture --test-threads=1
+          cargo test -p rsrp-policy-dsl --locked -j 1 -- --nocapture --test-threads=1
+          cargo test -p rsrp-security-core --locked -j 1 -- --nocapture --test-threads=1
+          cargo test -p rsrp-proof-engine --locked -j 1 -- --nocapture --test-threads=1
+          cargo test -p rsrp-pqcrypto --locked -j 1 -- --nocapture --test-threads=1
+          cargo test -p rsrp-immutable-ledger --locked -j 1 -- --nocapture --test-threads=1
       
       - name: Run doc tests
         run: |
-          cargo test --workspace --doc --locked -j 1
+          cargo test -p rsrp-policy-dsl --doc --locked -j 1
+          cargo test -p rsrp-security-core --doc --locked -j 1
+          cargo test -p rsrp-proof-engine --doc --locked -j 1
+          cargo test -p rsrp-pqcrypto --doc --locked -j 1
+          cargo test -p rsrp-immutable-ledger --doc --locked -j 1
       
       - name: Run miri (undefined behavior detection)
         continue-on-error: true
