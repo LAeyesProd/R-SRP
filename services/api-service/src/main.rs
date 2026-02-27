@@ -33,6 +33,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tokio::time::Duration;
 use tower_http::cors::CorsLayer;
 use tower_http::limit::RequestBodyLimitLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -228,6 +229,21 @@ fn parse_bool_env(name: &str, default: bool) -> bool {
         .unwrap_or(default)
 }
 
+fn parse_u64_env(name: &str, default: u64) -> Result<u64, std::io::Error> {
+    let Some(raw) = std::env::var(name).ok() else {
+        return Ok(default);
+    };
+    if raw.trim().is_empty() {
+        return Ok(default);
+    }
+    raw.trim().parse::<u64>().map_err(|e| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("Invalid {name} value `{raw}`: {e}"),
+        )
+    })
+}
+
 fn is_production_environment() -> bool {
     [
         std::env::var("ENV").ok(),
@@ -297,6 +313,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     tracing::info!("Starting R-SRP Ultra API Gateway");
+    let production_env = is_production_environment();
 
     // Security controls
     let tls_enabled = parse_bool_env("TLS_ENABLED", false);
@@ -304,6 +321,61 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "TLS_ENABLED must be true for release builds",
+        )
+        .into());
+    }
+    let entropy_health_enabled = parse_bool_env("ENTROPY_HEALTHCHECK_ENABLED", true);
+    if production_env && !entropy_health_enabled {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "ENTROPY_HEALTHCHECK_ENABLED=false is forbidden in production",
+        )
+        .into());
+    }
+    let entropy_fail_closed = parse_bool_env("ENTROPY_FAIL_CLOSED", production_env);
+    let entropy_interval_seconds =
+        parse_u64_env("ENTROPY_HEALTHCHECK_INTERVAL_SECONDS", 60)?.max(1);
+    let initial_entropy_health = if entropy_health_enabled {
+        let checked_at = chrono::Utc::now().to_rfc3339();
+        match crypto_core::entropy::entropy_health_check() {
+            Ok(_) => EntropyHealthState {
+                healthy: true,
+                last_checked_at: Some(checked_at),
+                last_error: None,
+            },
+            Err(err) => EntropyHealthState {
+                healthy: false,
+                last_checked_at: Some(checked_at),
+                last_error: Some(err.to_string()),
+            },
+        }
+    } else {
+        EntropyHealthState {
+            healthy: true,
+            last_checked_at: None,
+            last_error: None,
+        }
+    };
+    if entropy_health_enabled {
+        if initial_entropy_health.healthy {
+            tracing::info!("Initial entropy self-test passed");
+        } else {
+            tracing::error!(
+                error = %initial_entropy_health.last_error.as_deref().unwrap_or("unknown error"),
+                "Initial entropy self-test failed"
+            );
+        }
+    }
+    if entropy_health_enabled && entropy_fail_closed && !initial_entropy_health.healthy {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "Entropy self-test failed during startup: {}",
+                initial_entropy_health
+                    .last_error
+                    .as_deref()
+                    .unwrap_or("unknown error")
+            ),
         )
         .into());
     }
@@ -467,7 +539,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .as_deref()
         == Some("software-ed25519")
     {
-        if is_production_environment() {
+        if production_env {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "software-ed25519 signer is forbidden in production. Use AUDIT_PUBLICATION_SIGNING_PROVIDER=softhsm",
@@ -511,6 +583,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         audit_tsa_trust_store_pem,
         trusted_proxies: trusted_proxies.clone(),
     });
+    if entropy_health_enabled {
+        tracing::info!(
+            interval_seconds = entropy_interval_seconds,
+            fail_closed = entropy_fail_closed,
+            "Entropy health check enabled"
+        );
+        let state_for_entropy = state.clone();
+        tokio::spawn(async move {
+            let interval = Duration::from_secs(entropy_interval_seconds);
+            loop {
+                tokio::time::sleep(interval).await;
+                refresh_entropy_health(&state_for_entropy).await;
+            }
+        });
+    } else {
+        tracing::warn!("Entropy health check disabled");
+    }
 
     let rate_limit_backend = parse_rate_limit_backend()?;
     let rate_limiter = match rate_limit_backend {

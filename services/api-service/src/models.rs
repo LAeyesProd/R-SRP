@@ -14,6 +14,7 @@ pub struct HealthResponse {
 #[derive(Debug, Serialize)]
 pub struct ComponentStatus {
     pub engine: String,
+    pub entropy: String,
 }
 
 /// Readiness check response

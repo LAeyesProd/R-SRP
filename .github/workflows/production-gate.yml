@@ -49,6 +49,16 @@ jobs:
           cargo clean
           cargo fetch --locked
 
+      - name: Enforce zero-warning policy (clippy)
+        run: |
+          set -euo pipefail
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Enforce entropy self-test coverage
+        run: |
+          set -euo pipefail
+          cargo test -p rsrp-security-core --locked entropy::tests::test_entropy_health_check_reports_ok -- --nocapture
+
       - name: Ensure no mock backend in production feature graph
         run: |
           set -euo pipefail
