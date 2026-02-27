@@ -42,7 +42,7 @@ jobs:
             libclang-14-dev \
             pkg-config
 
-      - name: Export libclang
+      - name: Set libclang path
         run: |
           set -euo pipefail
           test -d /usr/lib/llvm-14/lib
