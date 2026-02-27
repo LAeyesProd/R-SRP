@@ -33,26 +33,54 @@ jobs:
         run: |
           set -euo pipefail
 
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            pkg-config \
-            cmake \
-            clang \
-            llvm \
-            llvm-dev \
-            libclang-dev
+          NEED_INSTALL=0
+          command -v cmake >/dev/null 2>&1 || NEED_INSTALL=1
+          command -v clang >/dev/null 2>&1 || NEED_INSTALL=1
+          command -v llvm-config >/dev/null 2>&1 || NEED_INSTALL=1
 
-          LIBCLANG_SO="$(ldconfig -p | awk '/libclang\.so/{print $NF; exit}' || true)"
-          if [ -z "${LIBCLANG_SO}" ]; then
-            LIBCLANG_SO="$(find /usr/lib /lib -type f -name 'libclang.so*' -print -quit 2>/dev/null || true)"
+          if [ "${NEED_INSTALL}" -eq 1 ]; then
+            sudo apt-get update
+            sudo apt-get install -y \
+              build-essential \
+              pkg-config \
+              cmake \
+              clang \
+              llvm \
+              llvm-dev \
+              libclang-dev
           fi
-          if [ -z "${LIBCLANG_SO}" ]; then
-            echo "libclang shared library not found" >&2
+
+          LIBCLANG_PATH=""
+          if command -v llvm-config >/dev/null 2>&1; then
+            LLVM_LIBDIR="$(llvm-config --libdir || true)"
+            if [ -n "${LLVM_LIBDIR}" ] && [ -d "${LLVM_LIBDIR}" ]; then
+              LIBCLANG_PATH="${LLVM_LIBDIR}"
+            fi
+          fi
+
+          if [ -z "${LIBCLANG_PATH}" ]; then
+            for CANDIDATE in /usr/lib/llvm-*/lib/libclang.so*; do
+              if [ -e "${CANDIDATE}" ]; then
+                LIBCLANG_PATH="$(dirname "${CANDIDATE}")"
+                break
+              fi
+            done
+          fi
+
+          if [ -z "${LIBCLANG_PATH}" ] && command -v ldconfig >/dev/null 2>&1; then
+            LIBCLANG_SO="$(ldconfig -p | awk '/libclang\.so/{print $NF; exit}' || true)"
+            if [ -n "${LIBCLANG_SO}" ]; then
+              LIBCLANG_PATH="$(dirname "${LIBCLANG_SO}")"
+            fi
+          fi
+
+          if [ -z "${LIBCLANG_PATH}" ]; then
+            echo "libclang shared library path not found" >&2
             exit 1
           fi
-          echo "Resolved libclang: ${LIBCLANG_SO}"
-          echo "LIBCLANG_PATH=$(dirname "${LIBCLANG_SO}")" >> $GITHUB_ENV
+
+          echo "Resolved LIBCLANG_PATH=${LIBCLANG_PATH}"
+          echo "LIBCLANG_PATH=${LIBCLANG_PATH}" >> "${GITHUB_ENV}"
 
       - name: Build real crypto backend
         run: cargo check --locked -p rsrp-pqcrypto --release --no-default-features --features real-crypto
