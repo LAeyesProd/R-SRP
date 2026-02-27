@@ -69,6 +69,10 @@ pub async fn validate_access(
 ) -> Result<Json<ValidationResponse>, ApiError> {
     validate_get_request(&params)?;
     tracing::debug!("Validating access for agent: {}", params.agent_id);
+    let now = Utc::now();
+    let is_within_mission_hours = state
+        .mission_schedule
+        .is_within_mission_hours(params.mission_id.as_deref(), now);
     let ip_address = middleware::resolve_client_ip(
         &headers,
         connect_info.as_ref().map(|ci| ci.0.ip()),
@@ -138,6 +142,10 @@ pub async fn validate_access_post(
 ) -> Result<Json<ValidationResponse>, ApiError> {
     validate_post_request(&payload)?;
     tracing::debug!("Validating access for agent: {}", payload.agent_id);
+    let now = Utc::now();
+    let is_within_mission_hours = state
+        .mission_schedule
+        .is_within_mission_hours(payload.mission_id.as_deref(), now);
     let ip_address = middleware::resolve_client_ip(
         &headers,
         connect_info.as_ref().map(|ci| ci.0.ip()),
@@ -388,7 +396,13 @@ pub async fn publish_daily(
         )
     })?;
 
-    let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let hourly_roots = state.logging.hourly_roots_snapshot().await;
+    let date = latest_hourly_root_date(&hourly_roots).ok_or_else(|| {
+        ApiError::new(
+            StatusCode::CONFLICT,
+            "No valid hourly roots available to derive publication date",
+        )
+    })?;
     match load_daily_publication_from_dir(dir, &date) {
         Ok(_) => {
             return Err(ApiError::new(
@@ -405,7 +419,6 @@ pub async fn publish_daily(
         }
     }
 
-    let hourly_roots = state.logging.hourly_roots_snapshot().await;
     let filtered = hourly_root_hashes_for_date(&hourly_roots, &date);
     if filtered.is_empty() {
         return Err(ApiError::new(
@@ -416,7 +429,8 @@ pub async fn publish_daily(
 
     let entry_count = state.logging.entry_count().await as u64;
     let mut publisher = state.publication_service.lock().await;
-    let mut publication = publisher.create_daily_publication(&filtered, entry_count);
+    let mut publication =
+        publisher.create_daily_publication_for_date(&date, &filtered, entry_count);
 
     let mut signature_public_key_hex = None;
     let mut signature_verified = None;
@@ -551,6 +565,15 @@ fn hourly_root_hashes_for_date(roots: &[HourlyRoot], date: &str) -> Vec<String> 
     filtered.into_iter().map(|r| r.root_hash.clone()).collect()
 }
 
+fn latest_hourly_root_date(roots: &[HourlyRoot]) -> Option<String> {
+    roots
+        .iter()
+        .filter_map(|r| r.hour.split('T').next())
+        .filter(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").is_ok())
+        .max()
+        .map(str::to_string)
+}
+
 fn publication_signed_payload(publication: &DailyPublication) -> Result<Vec<u8>, ApiError> {
     let mut unsigned = publication.clone();
     unsigned.signature = None;
@@ -675,6 +698,18 @@ fn tsa_cms_verify_error_status(err: &TsaCmsVerifyError) -> String {
         TsaCmsVerifyError::TrustStore(_) => "cms-trust-store-invalid".to_string(),
         TsaCmsVerifyError::Verify(_) => "cms-signature-invalid".to_string(),
     }
+}
+
+fn validate_publication_date(date: &str) -> Result<(), ApiError> {
+    let parsed = NaiveDate::parse_from_str(date, "%Y-%m-%d")
+        .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "date must be in YYYY-MM-DD format"))?;
+    if parsed.format("%Y-%m-%d").to_string() != date {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "date must be in YYYY-MM-DD format",
+        ));
+    }
+    Ok(())
 }
 
 const MAX_AGENT_ID_LEN: usize = 256;
@@ -995,6 +1030,33 @@ mod tests {
 
         let hashes = hourly_root_hashes_for_date(&roots, "2026-02-26");
         assert_eq!(hashes, vec!["h09".to_string(), "h12".to_string()]);
+    }
+
+    #[test]
+    fn test_latest_hourly_root_date_uses_logged_hour_prefix() {
+        let roots = vec![
+            HourlyRoot {
+                hour: "2026-02-24T23:00:00Z".to_string(),
+                root_hash: "h23".to_string(),
+                entry_count: 1,
+                generated_at: 0,
+            },
+            HourlyRoot {
+                hour: "2026-02-26T01:00:00Z".to_string(),
+                root_hash: "h01".to_string(),
+                entry_count: 1,
+                generated_at: 0,
+            },
+            HourlyRoot {
+                hour: "invalid-hour".to_string(),
+                root_hash: "bad".to_string(),
+                entry_count: 1,
+                generated_at: 0,
+            },
+        ];
+
+        let date = latest_hourly_root_date(&roots).expect("date");
+        assert_eq!(date, "2026-02-26");
     }
 
     #[test]

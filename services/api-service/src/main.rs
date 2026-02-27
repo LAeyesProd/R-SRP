@@ -150,6 +150,7 @@ impl AuditPublicationSigner {
 struct AppState {
     engine: CrueEngine,
     logging: immutable_logging::ImmutableLog,
+    mission_schedule: mission_schedule::MissionScheduleStore,
     publication_service: Mutex<immutable_logging::publication::PublicationService>,
     metrics: ApiMetrics,
     audit_publications_dir: Option<PathBuf>,
@@ -238,6 +239,24 @@ fn is_production_environment() -> bool {
     .any(|v| matches!(v.to_ascii_lowercase().as_str(), "prod" | "production"))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RateLimitBackend {
+    InMemory,
+    External,
+}
+
+fn parse_rate_limit_backend() -> Result<RateLimitBackend, std::io::Error> {
+    let raw = std::env::var("RATE_LIMIT_BACKEND").unwrap_or_else(|_| "in-memory".to_string());
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "in-memory" | "memory" => Ok(RateLimitBackend::InMemory),
+        "external" => Ok(RateLimitBackend::External),
+        other => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("Unsupported RATE_LIMIT_BACKEND value: {other}"),
+        )),
+    }
+}
+
 fn cors_layer_from_env() -> Result<CorsLayer, Box<dyn std::error::Error>> {
     let configured = std::env::var("CORS_ALLOWED_ORIGINS")
         .unwrap_or_else(|_| "http://localhost:3000,http://127.0.0.1:3000".to_string());
@@ -308,6 +327,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         immutable_logging::ImmutableLog::new()
     };
+    let mission_schedule = mission_schedule::MissionScheduleStore::from_env()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
     let audit_publications_dir = std::env::var("AUDIT_PUBLICATIONS_DIR")
         .ok()
         .filter(|v| !v.trim().is_empty())
@@ -483,6 +504,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state = Arc::new(AppState {
         engine,
         logging,
+        mission_schedule,
         publication_service: Mutex::new(immutable_logging::publication::PublicationService::new()),
         metrics: ApiMetrics::default(),
         audit_publications_dir,
@@ -492,11 +514,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         trusted_proxies: trusted_proxies.clone(),
     });
 
-    let rate_limiter =
-        middleware::IpRateLimiter::new(middleware::IpRateLimiterConfig::default(), trusted_proxies);
-    if is_production_environment() {
-        tracing::warn!(
-            "Using in-memory rate limiter. Deploy a distributed backend (e.g., Redis) for multi-replica production."
+    let rate_limit_backend = parse_rate_limit_backend()?;
+    let rate_limiter = match rate_limit_backend {
+        RateLimitBackend::InMemory => {
+            if is_production_environment() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "RATE_LIMIT_BACKEND=in-memory is forbidden in production; use RATE_LIMIT_BACKEND=external",
+                )
+                .into());
+            }
+            Some(middleware::IpRateLimiter::new(
+                middleware::IpRateLimiterConfig::from_env(),
+                trusted_proxies,
+            ))
+        }
+        RateLimitBackend::External => {
+            tracing::info!("Rate limiting delegated to external enforcement layer");
+            None
+        }
+    };
+    if is_production_environment() && rate_limiter.is_none() {
+        tracing::info!(
+            "Production mode: in-process rate limiter disabled; external backend is required."
         );
     }
     let cors = cors_layer_from_env()?;
@@ -530,22 +570,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             auth::require_auditor,
         ));
 
-    let api_v1 = Router::new()
+    let mut api_v1 = Router::new()
         .merge(validate_routes)
         .merge(audit_read_routes)
         .merge(audit_admin_routes)
         .merge(metrics_routes)
-        .layer(RequestBodyLimitLayer::new(64 * 1024))
-        .layer(from_fn_with_state(
-            rate_limiter.clone(),
+        .layer(RequestBodyLimitLayer::new(64 * 1024));
+    if let Some(rate_limiter) = rate_limiter {
+        api_v1 = api_v1.layer(from_fn_with_state(
+            rate_limiter,
             middleware::ip_rate_limit_middleware,
         ));
+    }
 
-    let app = Router::new()
-        // Health checks
-        .route("/health", get(handlers::health_check))
-        .route("/ready", get(handlers::ready_check))
-        .nest("/api/v1", api_v1)
+    let expose_public_health =
+        !is_production_environment() || parse_bool_env("PUBLIC_HEALTH_ENDPOINTS", false);
+    let mut app = Router::new().nest("/api/v1", api_v1);
+    if expose_public_health {
+        app = app
+            .route("/health", get(handlers::health_check))
+            .route("/ready", get(handlers::ready_check));
+    } else {
+        tracing::info!("Public /health and /ready endpoints disabled in production");
+    }
+
+    let app = app
         // Apply middleware
         .layer(from_fn(middleware::request_id_middleware))
         .layer(from_fn(middleware::timing_middleware))

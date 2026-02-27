@@ -19,6 +19,7 @@ Scope: `Policy -> Decision -> Proof -> Ledger -> Verification`
   - Keys are generated/stored in approved custody paths.
   - CI artifacts are produced from protected branches and reviewed code.
   - Audit storage is append-only and monitored.
+  - Full assumptions list and failure impact are tracked in `docs/ASSUMPTIONS_REGISTER.md`.
 
 ## 2. Trust Boundaries
 1. External client -> API boundary (untrusted to authenticated edge).

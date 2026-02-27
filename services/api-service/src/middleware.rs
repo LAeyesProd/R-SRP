@@ -216,14 +216,18 @@ fn client_key_from_request(
     headers: &HeaderMap,
     request: &Request,
     trusted_proxies: &TrustedProxyConfig,
+    ipv6_prefix_len: u8,
 ) -> String {
     let peer_ip = request
         .extensions()
         .get::<axum::extract::ConnectInfo<SocketAddr>>()
         .map(|connect_info| connect_info.0.ip());
-    let client_ip = resolve_client_ip(headers, peer_ip, trusted_proxies)
+    let client_ip = resolve_client_ip(headers, peer_ip, trusted_proxies);
+    let normalized = client_ip
+        .and_then(|ip| ip.parse::<IpAddr>().ok())
+        .map(|ip| normalize_ip_for_rate_key(ip, ipv6_prefix_len).to_string())
         .unwrap_or_else(|| "unknown".to_string());
-    format!("ip:{client_ip}")
+    format!("ip:{normalized}")
 }
 
 /// Per-IP rate limiting middleware.
@@ -232,7 +236,12 @@ pub async fn ip_rate_limit_middleware(
     request: Request,
     next: Next,
 ) -> Response {
-    let key = client_key_from_request(request.headers(), &request, &rate_limiter.trusted_proxies);
+    let key = client_key_from_request(
+        request.headers(),
+        &request,
+        &rate_limiter.trusted_proxies,
+        rate_limiter.config.ipv6_prefix_len,
+    );
     match rate_limiter.check_and_count(&key).await {
         Ok(()) => next.run(request).await,
         Err(retry_after_secs) => {
@@ -329,5 +338,12 @@ mod tests {
         let trusted = TrustedProxyConfig::from_cidrs(vec!["203.0.113.0/24".parse().unwrap()]);
         let resolved = resolve_client_ip(&headers, Some("203.0.113.10".parse().unwrap()), &trusted);
         assert_eq!(resolved.as_deref(), Some("198.51.100.7"));
+    }
+
+    #[test]
+    fn test_normalize_ip_for_rate_key_ipv6_prefix() {
+        let ip: IpAddr = "2001:db8:abcd:1234:1111:2222:3333:4444".parse().unwrap();
+        let normalized = normalize_ip_for_rate_key(ip, 64);
+        assert_eq!(normalized.to_string(), "2001:db8:abcd:1234::");
     }
 }

@@ -42,6 +42,7 @@ Protected assets:
 
 ## 4. Assumptions
 
+- Formal assumptions are maintained in `docs/ASSUMPTIONS_REGISTER.md`.
 - Production deploys with trusted entropy source and FIPS-compatible runtime where required.
 - Secrets and signing identities are managed by approved operators.
 - CI runners and release credentials are controlled and monitored.
@@ -78,6 +79,9 @@ Protected assets:
 
 Implementation and controls:
 - `docs/CRYPTO_ARCHITECTURE.md`
+- `docs/TRACEABILITY_MATRIX.md`
+- `docs/ENTROPY_BOUNDARY.md`
+- `docs/ASSUMPTIONS_REGISTER.md`
 - `docs/THREAT_MODEL.md`
 - `docs/THREAT_MODEL_STRIDE.md`
 - `docs/KEY_LIFECYCLE_POLICY.md`

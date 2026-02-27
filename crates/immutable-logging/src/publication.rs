@@ -167,6 +167,15 @@ impl PublicationService {
         entry_count: u64,
     ) -> DailyPublication {
         let date = Utc::now().format("%Y-%m-%d").to_string();
+        self.create_daily_publication_for_date(&date, hourly_roots, entry_count)
+    }
+
+    pub fn create_daily_publication_for_date(
+        &self,
+        date: &str,
+        hourly_roots: &[String],
+        entry_count: u64,
+    ) -> DailyPublication {
         let previous = self.previous_day_root.clone().unwrap_or_else(|| {
             "0000000000000000000000000000000000000000000000000000000000000000".to_string()
         });
@@ -175,7 +184,7 @@ impl PublicationService {
         let root_hash = Self::compute_merkle_root(hourly_roots);
 
         DailyPublication {
-            date,
+            date: date.to_string(),
             root_hash,
             entry_count,
             hourly_roots: hourly_roots.to_vec(),

@@ -3,9 +3,9 @@
 //! Provides abstraction layer for Thales Luna HSM and other PKCS#11 compatible HSMs
 
 use crate::{CryptoError, KeyMetadata, Result};
+use ed25519_dalek::{Signature as Ed25519Signature, Verifier as _, VerifyingKey};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
-use subtle::ConstantTimeEq;
 
 /// HSM configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -106,8 +106,32 @@ impl HsmSignerOps for SoftHsm {
 
 impl HsmVerifierOps for SoftHsm {
     fn verify(&mut self, key_handle: &HsmKeyHandle, data: &[u8], signature: &[u8]) -> Result<bool> {
-        let computed = self.sign(key_handle, data)?;
-        Ok(computed.as_slice().ct_eq(signature).into())
+        if signature.len() != 64 {
+            return Ok(false);
+        }
+        let public_key = match self.public_keys.get(&key_handle.key_id) {
+            Some(pk) => pk,
+            None => {
+                return Err(CryptoError::HsmError(format!(
+                    "Public key not found for key_id {}",
+                    key_handle.key_id
+                )));
+            }
+        };
+        if public_key.len() != 32 {
+            return Err(CryptoError::HsmError(
+                "Invalid SoftHSM public key size (expected 32-byte Ed25519 public key)".to_string(),
+            ));
+        }
+        let mut pk = [0u8; 32];
+        pk.copy_from_slice(public_key);
+        let verifying_key = VerifyingKey::from_bytes(&pk).map_err(|e| {
+            CryptoError::HsmError(format!("Invalid SoftHSM Ed25519 public key bytes: {e}"))
+        })?;
+        let mut sig = [0u8; 64];
+        sig.copy_from_slice(signature);
+        let signature = Ed25519Signature::from_bytes(&sig);
+        Ok(verifying_key.verify(data, &signature).is_ok())
     }
 }
 

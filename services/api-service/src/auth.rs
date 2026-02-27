@@ -10,7 +10,7 @@ use axum::{
 use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::{env, fs, sync::Arc};
+use std::{collections::HashMap, env, fs, sync::Arc};
 
 #[derive(Clone)]
 pub struct JwtAuthConfig {
@@ -27,31 +27,21 @@ impl JwtAuthConfig {
             &env::var("JWT_ALGORITHM").unwrap_or_else(|_| "EdDSA".to_string()),
         )?;
 
-        let decoding_key = match algorithm {
-            Algorithm::HS256 => {
-                let secret = required_env("JWT_SECRET")?;
-                tracing::warn!(
-                    "JWT_ALGORITHM=HS256 configured. Prefer EdDSA/RS256 for zero-trust deployments."
-                );
-                DecodingKey::from_secret(secret.as_bytes())
-            }
-            Algorithm::RS256 => {
-                let pem = read_public_key_pem()?;
-                DecodingKey::from_rsa_pem(&pem).map_err(|e| e.to_string())?
-            }
-            Algorithm::EdDSA => {
-                let pem = read_public_key_pem()?;
-                DecodingKey::from_ed_pem(&pem).map_err(|e| e.to_string())?
-            }
-            other => {
-                return Err(format!(
-                    "Unsupported JWT_ALGORITHM={other:?}. Allowed: HS256, RS256, EdDSA"
-                ));
-            }
-        };
+        if algorithm != Algorithm::EdDSA {
+            return Err("JWT_ALGORITHM must be EdDSA".to_string());
+        }
+        let pem = read_public_key_pem()?;
+        let decoding_key = DecodingKey::from_ed_pem(&pem).map_err(|e| e.to_string())?;
+        let default_kid = env::var("JWT_DEFAULT_KID")
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .unwrap_or_else(|| "default".to_string());
+        let mut keys = HashMap::new();
+        keys.insert(default_kid.clone(), decoding_key);
 
         Ok(Arc::new(Self {
-            decoding_key,
+            decoding_keys: Arc::new(keys),
+            default_kid,
             validation: build_validation(algorithm, &issuer, &audience),
         }))
     }
@@ -67,8 +57,9 @@ fn required_env(name: &str) -> Result<String, String> {
 
 fn parse_jwt_algorithm(raw: &str) -> Result<Algorithm, String> {
     match raw.trim().to_ascii_uppercase().as_str() {
-        "HS256" => Ok(Algorithm::HS256),
-        "RS256" => Ok(Algorithm::RS256),
+        "HS256" | "RS256" => {
+            Err("JWT_ALGORITHM must be EdDSA (HS256/RS256 are forbidden)".to_string())
+        }
         "EDDSA" => Ok(Algorithm::EdDSA),
         other => Err(format!("Unsupported JWT_ALGORITHM value: {other}")),
     }

@@ -13,6 +13,9 @@ Core documents:
 - `docs/SECURITY_TARGET.md`
 - `docs/ATTACK_SCENARIOS.md`
 - `docs/CRYPTO_ARCHITECTURE.md`
+- `docs/TRACEABILITY_MATRIX.md`
+- `docs/ENTROPY_BOUNDARY.md`
+- `docs/ASSUMPTIONS_REGISTER.md`
 - `docs/THREAT_MODEL.md`
 - `docs/THREAT_MODEL_STRIDE.md`
 - `docs/KEY_LIFECYCLE_POLICY.md`
@@ -36,6 +39,10 @@ Pipeline evidence:
 - Signature and provenance attestations
 - Reproducible build comparison report
 
+Risk acceptance evidence (when applicable):
+- `docs/DEPENDENCY_RISK_ASSESSMENT.md` (explicit accepted-risk record, owner, review date, compensating controls)
+- `deny.toml` justification entry referencing the accepted-risk record
+
 ## 4. Control-to-Evidence Mapping
 
 - Cryptographic integrity:
@@ -58,6 +65,8 @@ All conditions must be true:
 - Production profile builds pass (`rsrp-pqcrypto` with `production` feature).
 - No mock crypto in production dependency graph.
 - `cargo audit` and `cargo deny` gates pass according to policy.
+- Public health endpoints policy enforced in production (`PUBLIC_HEALTH_ENDPOINTS` explicit opt-in only).
+- Production deployment uses external shared rate limiting (`RATE_LIMIT_BACKEND=external`).
 - SBOM generated and signed.
 - Release artifacts signed and provenance attached.
 - Compact chain proof verification tests pass.
