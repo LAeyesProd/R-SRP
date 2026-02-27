@@ -15,9 +15,9 @@ default = []
 tsa-cms-openssl = ["immutable-logging/tsa-cms-openssl"]
 
 [dependencies]
-crue-engine = { package = "rsrp-proof-engine", version = "0.9.6", path = "../../crates/crue-engine" }
-immutable-logging = { package = "rsrp-immutable-ledger", version = "0.9.6", path = "../../crates/immutable-logging" }
-crypto-core = { package = "rsrp-security-core", version = "0.9.6", path = "../../crates/crypto-core" }
+crue-engine = { package = "rsrp-proof-engine", version = "0.9.7", path = "../../crates/crue-engine" }
+immutable-logging = { package = "rsrp-immutable-ledger", version = "0.9.7", path = "../../crates/immutable-logging" }
+crypto-core = { package = "rsrp-security-core", version = "0.9.7", path = "../../crates/crypto-core" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 base64 = "0.22"
