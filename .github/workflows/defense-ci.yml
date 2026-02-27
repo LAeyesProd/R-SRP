@@ -38,7 +38,7 @@ jobs:
           fetch-depth: 0
       
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@1.85.1
+        uses: dtolnay/rust-toolchain@1.93.1
         with:
           components: rustfmt, clippy, rust-src
       
@@ -87,7 +87,7 @@ jobs:
         uses: actions/checkout@v4
       
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@1.85.1
+        uses: dtolnay/rust-toolchain@1.93.1
         with:
           components: rustfmt, clippy
       
@@ -139,7 +139,7 @@ jobs:
         uses: actions/checkout@v4
       
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@1.85.1
+        uses: dtolnay/rust-toolchain@1.93.1
         with:
           components: rustfmt, clippy
       
@@ -185,7 +185,7 @@ jobs:
         uses: actions/checkout@v4
       
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@1.85.1
+        uses: dtolnay/rust-toolchain@1.93.1
         with:
           targets: x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu
       
@@ -297,7 +297,7 @@ jobs:
       - name: Check license compliance
         run: |
           # Ensure all dependencies have compatible licenses
-          cargo install cargo-deny --version 0.18.3 --locked || true
+          cargo install cargo-deny --version 0.19.0 --locked || true
           cargo deny check advisories || true
           cargo deny check bans || true
           cargo deny check licenses || true

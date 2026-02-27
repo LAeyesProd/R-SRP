@@ -25,7 +25,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@1.85.1
+        uses: dtolnay/rust-toolchain@1.93.1
 
       - name: Install OQS toolchain (bindgen/cmake)
         run: |
@@ -91,7 +91,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@1.85.1
+        uses: dtolnay/rust-toolchain@1.93.1
 
       - name: Install jq
         run: |
@@ -105,7 +105,7 @@ jobs:
       - name: Install policy tools
         run: |
           set -euo pipefail
-          cargo install cargo-deny --version 0.18.3 --locked
+          cargo install cargo-deny --version 0.19.0 --locked
           cargo install cargo-audit --locked
 
       - name: Enforce cargo-deny policy
