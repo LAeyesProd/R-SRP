@@ -18,6 +18,8 @@ env:
   RUST_BACKTRACE: "1"
   # Security flags
   RUSTFLAGS: "-D warnings"
+  CARGO_INCREMENTAL: "0"
+  CARGO_BUILD_PIPELINING: "false"
   SECURE_PROFILE: "true"
 
 jobs:

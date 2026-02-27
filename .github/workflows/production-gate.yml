@@ -9,6 +9,9 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_BUILD_PIPELINING: "false"
+  CARGO_BUILD_JOBS: "1"
 
 jobs:
   production-profile:
