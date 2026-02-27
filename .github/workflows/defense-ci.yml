@@ -20,6 +20,7 @@ env:
   RUSTFLAGS: "-D warnings"
   CARGO_INCREMENTAL: "0"
   CARGO_BUILD_PIPELINING: "false"
+  CARGO_BUILD_JOBS: "1"
   SECURE_PROFILE: "true"
 
 jobs:
@@ -159,7 +160,7 @@ jobs:
       
       - name: Run doc tests
         run: |
-          cargo test --workspace --doc
+          cargo test --workspace --doc --locked -j 1
       
       - name: Run miri (undefined behavior detection)
         continue-on-error: true
