@@ -139,7 +139,6 @@ impl Kyber {
     /// Create new Kyber context
     pub fn new(level: KyberLevel) -> Self {
         assert_backend_selected();
-        warn_if_mock_backend();
         crate::validate_runtime_security_config()
             .expect("production runtime security configuration validation failed");
         #[cfg(feature = "production")]
