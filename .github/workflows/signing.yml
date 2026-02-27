@@ -19,7 +19,6 @@ on:
 env:
   # Cosign configuration
   COSIGN_EXPERIMENTAL: "1"
-  COSIGN_REPOSITORY: ghcr.io
   IMAGE_REGISTRY: ghcr.io
   IMAGE_NAME: laeyesprod/r-srp
 
@@ -54,6 +53,7 @@ jobs:
         uses: sigstore/cosign-installer@v3.10.1
       
       - name: Build and push image
+        id: build_image
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -73,30 +73,30 @@ jobs:
       - name: Sign the image with Cosign (Keyless OIDC)
         if: github.event_name != 'pull_request'
         env:
-          IMAGE_URL: "${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          IMAGE_REF: "${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build_image.outputs.digest }}"
         run: |
           # Keyless signing with OIDC (no static keys)
-          cosign sign --yes $IMAGE_URL
+          cosign sign --yes $IMAGE_REF
           
           # Also sign with KMS for additional security (optional)
           # cosign sign --key kms://key:///rsrp-ultra/signing-key $IMAGE_URL
       
       - name: Verify Cosign signature
         if: github.event_name != 'pull_request'
+        env:
+          IMAGE_REF: "${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build_image.outputs.digest }}"
         run: |
-          IMAGE_URL="${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
-          
           # Verify the signature
-          cosign verify $IMAGE_URL
+          cosign verify $IMAGE_REF
       
       - name: Generate SBOM for container
         if: github.event_name != 'pull_request'
+        env:
+          IMAGE_REF: "${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build_image.outputs.digest }}"
         run: |
-          IMAGE_URL="${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
-          
           # Generate SBOM using syft
           curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
-          syft $IMAGE_URL -o spdx-json > container-sbom.spdx.json
+          syft $IMAGE_REF -o spdx-json > container-sbom.spdx.json
 
       - name: Install jq
         if: github.event_name != 'pull_request'
@@ -106,14 +106,14 @@ jobs:
       
       - name: Attest SBOM
         if: github.event_name != 'pull_request'
+        env:
+          IMAGE_REF: "${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build_image.outputs.digest }}"
         run: |
-          IMAGE_URL="${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
-          
           # Create attestation
           echo '{}' | jq '.subject = [{"name": "container-sbom.spdx.json", "digest": {"sha256": "'$(sha256sum container-sbom.spdx.json | cut -d' ' -1)'"}}]' > attestation.json
           
           # Attest the SBOM
-          cosign attest --type spdx --predicate attestation.json --yes $IMAGE_URL
+          cosign attest --type spdx --predicate attestation.json --yes $IMAGE_REF
       
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
