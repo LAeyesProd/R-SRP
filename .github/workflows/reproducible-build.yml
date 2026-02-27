@@ -37,7 +37,11 @@ jobs:
       
       - name: Build release
         run: |
-          cargo build --release --locked --frozen --workspace
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            cargo build --workspace --locked
+          else
+            cargo build --release --locked --frozen --workspace
+          fi
       
       - name: Calculate binary hashes
         run: |
@@ -58,7 +62,9 @@ jobs:
   # Build on Fedora (different libc)
   build-fedora:
     name: Build on Fedora (x86_64)
-    runs-on: fedora-latest
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    container: fedora:40
     permissions:
       contents: read
     
@@ -73,7 +79,7 @@ jobs:
       
       - name: Install build dependencies
         run: |
-          dnf install -y pkgconfig openssl-devel
+          dnf install -y git curl tar gcc gcc-c++ make pkgconfig openssl-devel
       
       - name: Set SOURCE_DATE_EPOCH
         run: |
@@ -102,6 +108,7 @@ jobs:
   # Build on ARM64
   build-arm64:
     name: Build on ARM64
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
