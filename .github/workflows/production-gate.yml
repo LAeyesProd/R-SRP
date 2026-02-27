@@ -73,7 +73,8 @@ jobs:
       - name: Enforce zero-warning policy (clippy)
         run: |
           set -euo pipefail
-          cargo clippy --workspace --all-targets --locked -- -D warnings
+          cargo check --workspace --all-targets --locked
+          cargo clippy --workspace --all-targets --locked --no-deps -- -D warnings
 
       - name: Enforce entropy self-test coverage
         run: |
