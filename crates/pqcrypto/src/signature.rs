@@ -177,7 +177,7 @@ impl Dilithium {
 use crate::error::{PqcError, PqcResult};
 
 fn assert_backend_selected() {
-    #[cfg(not(any(feature = "mock-crypto", feature = "real-crypto")))]
+    #[cfg(all(not(any(feature = "mock-crypto", feature = "real-crypto")), not(test)))]
     panic!("rsrp-pqcrypto: no crypto backend selected (enable `mock-crypto` or `real-crypto`)");
 }
 
@@ -191,6 +191,11 @@ fn active_provider() -> &'static dyn SignatureProvider {
         &MOCK_PROVIDER
     }
     #[cfg(not(any(feature = "mock-crypto", feature = "real-crypto")))]
+    #[cfg(test)]
+    {
+        &TEST_FALLBACK_PROVIDER
+    }
+    #[cfg(all(not(any(feature = "mock-crypto", feature = "real-crypto")), not(test)))]
     {
         panic!("rsrp-pqcrypto: no crypto backend selected (enable `mock-crypto` or `real-crypto`)");
     }
@@ -201,6 +206,9 @@ static MOCK_PROVIDER: MockProvider = MockProvider;
 
 #[cfg(feature = "real-crypto")]
 static OQS_PROVIDER: OqsProvider = OqsProvider;
+
+#[cfg(all(test, not(any(feature = "mock-crypto", feature = "real-crypto"))))]
+static TEST_FALLBACK_PROVIDER: MockProvider = MockProvider;
 
 impl SignatureProvider for MockProvider {
     fn backend_id(&self) -> &'static str {

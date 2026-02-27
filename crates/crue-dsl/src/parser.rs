@@ -1,5 +1,5 @@
 //! CRUE DSL Parser
-//! 
+//!
 //! Parses CRUE DSL source code into an AST
 
 use crate::ast::*;
@@ -39,6 +39,7 @@ enum Token {
     Neq,
     Identifier(String),
     Number(i64),
+    InvalidNumber(String),
     String(String),
     Dot,
     ParenOpen,
@@ -53,28 +54,33 @@ impl Parser {
     /// Create a new parser with source code
     pub fn new(source: &str) -> Self {
         let tokens = Self::tokenize(source);
-        Parser { tokens, position: 0 }
+        Parser {
+            tokens,
+            position: 0,
+        }
     }
-    
+
     /// Tokenize source code
     fn tokenize(source: &str) -> Vec<Token> {
         let mut tokens = Vec::new();
         let mut chars = source.chars().peekable();
-        
+
         while let Some(c) = chars.next() {
             // Skip whitespace
             if c.is_whitespace() {
                 continue;
             }
-            
+
             // Comments
             if c == '/' && chars.peek() == Some(&'/') {
                 while let Some(c) = chars.next() {
-                    if c == '\n' { break; }
+                    if c == '\n' {
+                        break;
+                    }
                 }
                 continue;
             }
-            
+
             // Identifiers and keywords
             if c.is_alphabetic() || c == '_' {
                 let mut ident = String::new();
@@ -88,7 +94,7 @@ impl Parser {
                         break;
                     }
                 }
-                
+
                 let kw = ident.to_uppercase();
                 tokens.push(match kw.as_str() {
                     "RULE" => Token::Rule,
@@ -115,7 +121,7 @@ impl Parser {
                 });
                 continue;
             }
-            
+
             // Numbers
             if c.is_ascii_digit() {
                 let mut num = String::new();
@@ -129,15 +135,20 @@ impl Parser {
                         break;
                     }
                 }
-                tokens.push(Token::Number(num.parse().unwrap_or(0)));
+                match num.parse::<i64>() {
+                    Ok(v) => tokens.push(Token::Number(v)),
+                    Err(_) => tokens.push(Token::InvalidNumber(num)),
+                }
                 continue;
             }
-            
+
             // Strings
             if c == '"' {
                 let mut s = String::new();
                 while let Some(c) = chars.next() {
-                    if c == '"' { break; }
+                    if c == '"' {
+                        break;
+                    }
                     if c == '\\' {
                         if let Some(ec) = chars.next() {
                             s.push(ec);
@@ -149,7 +160,7 @@ impl Parser {
                 tokens.push(Token::String(s));
                 continue;
             }
-            
+
             // Operators
             match c {
                 '.' => tokens.push(Token::Dot),
@@ -189,32 +200,35 @@ impl Parser {
                 _ => {}
             }
         }
-        
+
         tokens.push(Token::Eof);
         tokens
     }
-    
+
     /// Parse the source into an AST
     pub fn parse(&mut self) -> Result<RuleAst> {
         self.parse_rule()
     }
-    
+
     /// Parse RULE declaration
     fn parse_rule(&mut self) -> Result<RuleAst> {
         self.expect(Token::Rule)?;
-        
+
         let id = match self.next() {
             Token::Identifier(id) => id,
             _ => return Err(self.error("Expected rule ID")),
         };
-        
+
         self.expect(Token::Version)?;
         let version = match self.next() {
             Token::Number(n) => n.to_string(),
             Token::Identifier(s) => s,
+            Token::InvalidNumber(raw) => {
+                return Err(self.error(&format!("Invalid numeric literal: {}", raw)))
+            }
             _ => return Err(self.error("Expected version")),
         };
-        
+
         // Handle version format like "1.2.0"
         if let Token::Dot = self.peek() {
             self.next(); // consume dot
@@ -255,17 +269,17 @@ impl Parser {
                 });
             }
         }
-        
+
         let signed = self.match_token(Token::Signed);
-        
+
         self.expect(Token::When)?;
         let when_clause = self.parse_expression()?;
-        
+
         self.expect(Token::Then)?;
         let then_clause = self.parse_actions()?;
-        
+
         let metadata = self.parse_metadata()?;
-        
+
         Ok(RuleAst {
             id,
             version,
@@ -275,7 +289,7 @@ impl Parser {
             metadata,
         })
     }
-    
+
     /// Parse metadata section
     fn parse_metadata(&mut self) -> Result<MetadataNode> {
         // For now, return default metadata
@@ -289,36 +303,36 @@ impl Parser {
             validated_by: None,
         })
     }
-    
+
     /// Parse expressions (recursive descent)
     fn parse_expression(&mut self) -> Result<Expression> {
         self.parse_or_expr()
     }
-    
+
     /// Parse OR expressions
     fn parse_or_expr(&mut self) -> Result<Expression> {
         let mut left = self.parse_and_expr()?;
-        
+
         while self.match_token(Token::Or) {
             let right = self.parse_and_expr()?;
             left = Expression::Or(Box::new(left), Box::new(right));
         }
-        
+
         Ok(left)
     }
-    
+
     /// Parse AND expressions
     fn parse_and_expr(&mut self) -> Result<Expression> {
         let mut left = self.parse_not_expr()?;
-        
+
         while self.match_token(Token::And) {
             let right = self.parse_not_expr()?;
             left = Expression::And(Box::new(left), Box::new(right));
         }
-        
+
         Ok(left)
     }
-    
+
     /// Parse NOT expressions
     fn parse_not_expr(&mut self) -> Result<Expression> {
         if self.match_token(Token::Not) {
@@ -327,11 +341,11 @@ impl Parser {
         }
         self.parse_comparison_expr()
     }
-    
+
     /// Parse comparison expressions
     fn parse_comparison_expr(&mut self) -> Result<Expression> {
         let left = self.parse_primary_expr()?;
-        
+
         // Check for comparison operators
         if let Token::Gt = self.peek() {
             self.next();
@@ -363,14 +377,14 @@ impl Parser {
             let right = self.parse_primary_expr()?;
             return Ok(Expression::Neq(Box::new(left), Box::new(right)));
         }
-        
+
         Ok(left)
     }
-    
+
     /// Parse primary expressions
     fn parse_primary_expr(&mut self) -> Result<Expression> {
         let token = self.next();
-        
+
         match token {
             Token::Identifier(id) => {
                 // Check if it's a field path
@@ -380,7 +394,7 @@ impl Parser {
                         return Ok(Expression::Field(format!("{}.{}", id, field)));
                     }
                 }
-                
+
                 // Check for true/false
                 if id == "true" {
                     return Ok(Expression::True);
@@ -388,11 +402,14 @@ impl Parser {
                 if id == "false" {
                     return Ok(Expression::False);
                 }
-                
+
                 // It's just a field
                 Ok(Expression::Field(id))
             }
             Token::Number(n) => Ok(Expression::Value(Value::Number(n))),
+            Token::InvalidNumber(raw) => {
+                Err(self.error(&format!("Invalid numeric literal: {}", raw)))
+            }
             Token::String(s) => Ok(Expression::Value(Value::String(s))),
             Token::ParenOpen => {
                 let expr = self.parse_expression()?;
@@ -402,11 +419,11 @@ impl Parser {
             _ => Err(self.error("Unexpected token in expression")),
         }
     }
-    
+
     /// Parse THEN actions
     fn parse_actions(&mut self) -> Result<Vec<ActionNode>> {
         let mut actions = Vec::new();
-        
+
         while let Token::Block = self.peek() {
             self.next();
             self.expect(Token::With)?;
@@ -416,38 +433,41 @@ impl Parser {
                 Token::Identifier(id) => id,
                 _ => return Err(self.error("Expected code string")),
             };
-            
+
             let message = if self.match_token(Token::Identifier("message".to_string())) {
                 self.expect(Token::String(String::new()))?;
                 Some(String::new())
             } else {
                 None
             };
-            
+
             actions.push(ActionNode::Block { code, message });
-            
+
             // Check for ALERT SOC
             if self.match_token(Token::Alert) {
                 self.expect(Token::Identifier("SOC".to_string()))?;
                 actions.push(ActionNode::AlertSoc);
             }
         }
-        
+
         Ok(actions)
     }
-    
+
     // Helper methods
-    
+
     fn peek(&self) -> Token {
-        self.tokens.get(self.position).cloned().unwrap_or(Token::Eof)
+        self.tokens
+            .get(self.position)
+            .cloned()
+            .unwrap_or(Token::Eof)
     }
-    
+
     fn next(&mut self) -> Token {
         let token = self.peek();
         self.position += 1;
         token
     }
-    
+
     fn expect(&mut self, expected: Token) -> Result<()> {
         let token = self.next();
         if token == expected {
@@ -456,7 +476,7 @@ impl Parser {
             Err(self.error(&format!("Expected {:?}, got {:?}", expected, token)))
         }
     }
-    
+
     fn match_token(&mut self, expected: Token) -> bool {
         if self.peek() == expected {
             self.position += 1;
@@ -465,7 +485,7 @@ impl Parser {
             false
         }
     }
-    
+
     fn error(&self, msg: &str) -> DslError {
         DslError::ParseError(msg.to_string())
     }
@@ -480,14 +500,14 @@ pub fn parse(source: &str) -> Result<RuleAst> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_tokenize() {
         let tokens = Parser::tokenize("RULE CRUE_001 VERSION 1.0");
         assert!(tokens.contains(&Token::Rule));
         assert!(tokens.contains(&Token::Identifier("CRUE_001".to_string())));
     }
-    
+
     #[test]
     fn test_parse_simple_rule() {
         let source = r#"
@@ -497,7 +517,7 @@ mod tests {
             THEN
                 BLOCK WITH CODE "VOLUME_EXCEEDED"
         "#;
-        
+
         let ast = parse(source).unwrap();
         assert_eq!(ast.id, "CRUE_001");
     }

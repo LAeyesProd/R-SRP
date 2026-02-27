@@ -3,7 +3,7 @@
 use crate::context::{EvaluationContext, FieldValue};
 use crate::decision::Decision;
 use crate::EvaluationRequest;
-use crue_dsl::compiler::Bytecode;
+use crue_dsl::compiler::{ActionDecision, ActionInstruction, Bytecode, Constant};
 use serde::Serialize;
 
 const PROOF_BINDING_SERIALIZATION_VERSION: u8 = 1;
@@ -127,7 +127,7 @@ impl ProofBinding {
         crypto_backend_id: &str,
         policy_hash_hex: Option<&str>,
     ) -> Result<Self, String> {
-        let bytecode_hash = sha256_hex(&canonical_json_bytes(bytecode)?);
+        let bytecode_hash = sha256_hex(&canonical_bytecode_bytes(bytecode)?);
         let policy_hash = policy_hash_hex.unwrap_or(&bytecode_hash).to_string();
         Ok(Self {
             serialization_version: PROOF_BINDING_SERIALIZATION_VERSION,
@@ -136,8 +136,8 @@ impl ProofBinding {
             crypto_backend_id: crypto_backend_id.to_string(),
             policy_hash,
             bytecode_hash,
-            input_hash: sha256_hex(&canonical_json_bytes(request)?),
-            state_hash: sha256_hex(&canonical_json_bytes(&state_snapshot(ctx))?),
+            input_hash: sha256_hex(&canonical_request_bytes(request)?),
+            state_hash: sha256_hex(&canonical_state_bytes(&state_snapshot(ctx))?),
             decision,
         })
     }
@@ -592,8 +592,205 @@ fn state_snapshot(ctx: &EvaluationContext) -> Vec<StateField<'_>> {
         .collect()
 }
 
-fn canonical_json_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>, String> {
-    serde_json::to_vec(value).map_err(|e| e.to_string())
+fn canonical_bytecode_bytes(bytecode: &Bytecode) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    out.extend_from_slice(b"rsrp.bytecode.v1");
+
+    encode_len_prefixed_bytes(&mut out, &bytecode.instructions)?;
+
+    encode_u32(
+        &mut out,
+        bytecode
+            .constants
+            .len()
+            .try_into()
+            .map_err(|_| "too many constants".to_string())?,
+    );
+    for c in &bytecode.constants {
+        match c {
+            Constant::Number(n) => {
+                out.push(1);
+                out.extend_from_slice(&n.to_be_bytes());
+            }
+            Constant::String(s) => {
+                out.push(2);
+                encode_len_prefixed_bytes(&mut out, s.as_bytes())?;
+            }
+            Constant::Boolean(b) => {
+                out.push(3);
+                out.push(u8::from(*b));
+            }
+        }
+    }
+
+    encode_u32(
+        &mut out,
+        bytecode
+            .fields
+            .len()
+            .try_into()
+            .map_err(|_| "too many fields".to_string())?,
+    );
+    for field in &bytecode.fields {
+        encode_len_prefixed_bytes(&mut out, field.as_bytes())?;
+    }
+
+    encode_u32(
+        &mut out,
+        bytecode
+            .action_instructions
+            .len()
+            .try_into()
+            .map_err(|_| "too many action instructions".to_string())?,
+    );
+    for instruction in &bytecode.action_instructions {
+        encode_action_instruction(&mut out, instruction)?;
+    }
+
+    Ok(out)
+}
+
+fn canonical_request_bytes(request: &EvaluationRequest) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    out.extend_from_slice(b"rsrp.request.v1");
+    encode_len_prefixed_bytes(&mut out, request.request_id.as_bytes())?;
+    encode_len_prefixed_bytes(&mut out, request.agent_id.as_bytes())?;
+    encode_len_prefixed_bytes(&mut out, request.agent_org.as_bytes())?;
+    encode_len_prefixed_bytes(&mut out, request.agent_level.as_bytes())?;
+    encode_opt_str(&mut out, request.mission_id.as_deref())?;
+    encode_opt_str(&mut out, request.mission_type.as_deref())?;
+    encode_opt_str(&mut out, request.query_type.as_deref())?;
+    encode_opt_str(&mut out, request.justification.as_deref())?;
+    encode_opt_str(&mut out, request.export_format.as_deref())?;
+    encode_opt_u32(&mut out, request.result_limit);
+    encode_u32(&mut out, request.requests_last_hour);
+    encode_u32(&mut out, request.requests_last_24h);
+    encode_u32(&mut out, request.results_last_query);
+    encode_opt_str(&mut out, request.account_department.as_deref())?;
+    encode_u32(
+        &mut out,
+        request
+            .allowed_departments
+            .len()
+            .try_into()
+            .map_err(|_| "too many departments".to_string())?,
+    );
+    for dept in &request.allowed_departments {
+        encode_u32(&mut out, *dept);
+    }
+    encode_u32(&mut out, request.request_hour);
+    out.push(u8::from(request.is_within_mission_hours));
+    Ok(out)
+}
+
+fn canonical_state_bytes(fields: &[StateField<'_>]) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    out.extend_from_slice(b"rsrp.state.v1");
+    encode_u32(
+        &mut out,
+        fields
+            .len()
+            .try_into()
+            .map_err(|_| "too many state fields".to_string())?,
+    );
+    for field in fields {
+        encode_len_prefixed_bytes(&mut out, field.key.as_bytes())?;
+        encode_field_value(&mut out, field.value)?;
+    }
+    Ok(out)
+}
+
+fn encode_action_instruction(
+    out: &mut Vec<u8>,
+    instruction: &ActionInstruction,
+) -> Result<(), String> {
+    match instruction {
+        ActionInstruction::SetDecision(d) => {
+            out.push(1);
+            let code = match d {
+                ActionDecision::Allow => 1,
+                ActionDecision::Block => 2,
+                ActionDecision::Warn => 3,
+                ActionDecision::ApprovalRequired => 4,
+            };
+            out.push(code);
+        }
+        ActionInstruction::SetErrorCode(v) => {
+            out.push(2);
+            encode_len_prefixed_bytes(out, v.as_bytes())?;
+        }
+        ActionInstruction::SetMessage(v) => {
+            out.push(3);
+            encode_len_prefixed_bytes(out, v.as_bytes())?;
+        }
+        ActionInstruction::SetApprovalTimeout(v) => {
+            out.push(4);
+            encode_u32(out, *v);
+        }
+        ActionInstruction::SetAlertSoc(v) => {
+            out.push(5);
+            out.push(u8::from(*v));
+        }
+        ActionInstruction::Halt => out.push(6),
+    }
+    Ok(())
+}
+
+fn encode_field_value(out: &mut Vec<u8>, value: &FieldValue) -> Result<(), String> {
+    match value {
+        FieldValue::Number(n) => {
+            out.push(1);
+            out.extend_from_slice(&n.to_be_bytes());
+        }
+        FieldValue::Float(f) => {
+            out.push(2);
+            out.extend_from_slice(&f.to_bits().to_be_bytes());
+        }
+        FieldValue::String(s) => {
+            out.push(3);
+            encode_len_prefixed_bytes(out, s.as_bytes())?;
+        }
+        FieldValue::Boolean(b) => {
+            out.push(4);
+            out.push(u8::from(*b));
+        }
+    }
+    Ok(())
+}
+
+fn encode_u32(out: &mut Vec<u8>, value: u32) {
+    out.extend_from_slice(&value.to_be_bytes());
+}
+
+fn encode_opt_u32(out: &mut Vec<u8>, value: Option<u32>) {
+    match value {
+        Some(v) => {
+            out.push(1);
+            encode_u32(out, v);
+        }
+        None => out.push(0),
+    }
+}
+
+fn encode_opt_str(out: &mut Vec<u8>, value: Option<&str>) -> Result<(), String> {
+    match value {
+        Some(v) => {
+            out.push(1);
+            encode_len_prefixed_bytes(out, v.as_bytes())?;
+        }
+        None => out.push(0),
+    }
+    Ok(())
+}
+
+fn encode_len_prefixed_bytes(out: &mut Vec<u8>, value: &[u8]) -> Result<(), String> {
+    let len: u32 = value
+        .len()
+        .try_into()
+        .map_err(|_| "field too large".to_string())?;
+    encode_u32(out, len);
+    out.extend_from_slice(value);
+    Ok(())
 }
 
 fn encode_len_prefixed_str(out: &mut Vec<u8>, value: &str) -> Result<(), String> {
@@ -849,7 +1046,7 @@ THEN
         );
         assert_eq!(
             canonical_hex,
-            "010100090001111111111111111111111111111111111111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222223333333333333333333333333333333333333333333333333333333333333333444444444444444444444444444444444444444444444444444444444444444402002101e7e331964026891ae93f6f0d4b20c19f95cf20d6c6ba87fd73e287b081a4620100000040e22e8f4b3ab834f4db936d865b8ded519e0aac395ca625c154840f37f7f571429e91b91f97652e4d84495d903bce814fde0d84bd6606ce854648bc064d25f106"
+            "010100090001111111111111111111111111111111111111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222223333333333333333333333333333333333333333333333333333333333333333444444444444444444444444444444444444444444444444444444444444444402002101e7e331964026891ae93f6f0d4b20c19f95cf20d6c6ba87fd73e287b081a46201000000406dfc53cce34237ad8fdd62a3fc35b1221d18d7503971bdf73ec1f37d0cacfe002cc3405dfa2c046b66a68760c29c55a2fb8c130cc3d926a54645c771989dc000"
         );
     }
 

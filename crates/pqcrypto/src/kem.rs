@@ -174,7 +174,7 @@ impl Kyber {
 }
 
 fn assert_backend_selected() {
-    #[cfg(not(any(feature = "mock-crypto", feature = "real-crypto")))]
+    #[cfg(all(not(any(feature = "mock-crypto", feature = "real-crypto")), not(test)))]
     panic!("rsrp-pqcrypto: no KEM backend selected (enable `mock-crypto` or `real-crypto`)");
 }
 
@@ -188,6 +188,11 @@ fn active_provider() -> &'static dyn KemProvider {
         &MOCK_KEM_PROVIDER
     }
     #[cfg(not(any(feature = "mock-crypto", feature = "real-crypto")))]
+    #[cfg(test)]
+    {
+        &TEST_FALLBACK_KEM_PROVIDER
+    }
+    #[cfg(all(not(any(feature = "mock-crypto", feature = "real-crypto")), not(test)))]
     {
         panic!("rsrp-pqcrypto: no KEM backend selected (enable `mock-crypto` or `real-crypto`)");
     }
@@ -198,6 +203,9 @@ static MOCK_KEM_PROVIDER: MockKemProvider = MockKemProvider;
 
 #[cfg(feature = "real-crypto")]
 static OQS_KEM_PROVIDER: OqsKemProvider = OqsKemProvider;
+
+#[cfg(all(test, not(any(feature = "mock-crypto", feature = "real-crypto"))))]
+static TEST_FALLBACK_KEM_PROVIDER: MockKemProvider = MockKemProvider;
 
 impl KemProvider for MockKemProvider {
     fn backend_id(&self) -> &'static str {

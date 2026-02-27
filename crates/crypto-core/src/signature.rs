@@ -2,6 +2,7 @@
 
 use crate::{CryptoError, KeyMetadata, Result, SignatureAlgorithm};
 use ed25519_dalek::{Signature as Ed25519Signature, Signer, SigningKey, VerifyingKey};
+use hkdf::Hkdf;
 use rand::{rngs::OsRng, rngs::StdRng, SeedableRng};
 use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey};
 use rsa::pss::{
@@ -9,7 +10,6 @@ use rsa::pss::{
     VerifyingKey as RsaPssVerifyingKey,
 };
 use rsa::{RsaPrivateKey, RsaPublicKey};
-use sha2::Digest as _;
 use signature::{RandomizedSigner, SignatureEncoding, Verifier as SignatureVerifier};
 use thiserror::Error;
 use zeroize::{Zeroize, ZeroizeOnDrop};
@@ -77,14 +77,16 @@ impl Ed25519KeyPair {
         }
     }
 
-    /// Deterministically derive a key pair from secret material (SHA-256(secret)).
+    /// Deterministically derive a key pair from secret material (HKDF-SHA256).
     ///
     /// This is useful for service bootstrapping in environments where a proper key
     /// management integration is not yet available. Prefer HSM/KMS in production.
     pub fn derive_from_secret(secret: &[u8], key_id: Option<String>) -> Self {
-        let digest = sha2::Sha256::digest(secret);
+        // Context-bound HKDF derivation to avoid raw hash-as-key constructions.
+        let hk = Hkdf::<sha2::Sha256>::new(Some(b"rsrp-security-core-ed25519-v1"), secret);
         let mut seed = [0u8; 32];
-        seed.copy_from_slice(&digest);
+        hk.expand(b"signing-seed", &mut seed)
+            .expect("HKDF expand to 32 bytes should never fail");
         Self::from_seed(seed, key_id)
     }
 
