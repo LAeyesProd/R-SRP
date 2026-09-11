@@ -826,20 +826,14 @@ mod tests {
 
     #[test]
     fn test_validate_audit_publication_signing_config_rejects_secret_with_softhsm() {
-        let err = validate_audit_publication_signing_config(
-            Some("softhsm"),
-            Some(&"a".repeat(32)),
-        )
-        .expect_err("softhsm with secret must fail");
+        let err = validate_audit_publication_signing_config(Some("softhsm"), Some(&"a".repeat(32)))
+            .expect_err("softhsm with secret must fail");
         assert!(err.to_string().contains("must be unset"));
     }
 
     #[test]
     fn test_validate_audit_publication_signing_config_accepts_explicit_software_signer() {
-        validate_audit_publication_signing_config(
-            Some("software-ed25519"),
-            Some(&"a".repeat(32)),
-        )
-        .expect("explicit software signer with strong secret allowed");
+        validate_audit_publication_signing_config(Some("software-ed25519"), Some(&"a".repeat(32)))
+            .expect("explicit software signer with strong secret allowed");
     }
 }

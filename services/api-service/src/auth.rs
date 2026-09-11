@@ -70,10 +70,14 @@ fn env_var_if_present(name: &str) -> Option<String> {
 }
 
 fn is_production_environment() -> bool {
-    [env::var("ENV").ok(), env::var("APP_ENV").ok(), env::var("RUST_ENV").ok()]
-        .into_iter()
-        .flatten()
-        .any(|v| matches!(v.to_ascii_lowercase().as_str(), "prod" | "production"))
+    [
+        env::var("ENV").ok(),
+        env::var("APP_ENV").ok(),
+        env::var("RUST_ENV").ok(),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|v| matches!(v.to_ascii_lowercase().as_str(), "prod" | "production"))
 }
 
 fn read_public_key_pem_from_sources(
@@ -82,15 +86,16 @@ fn read_public_key_pem_from_sources(
     production_env: bool,
 ) -> Result<Vec<u8>, String> {
     match (inline_pem, path) {
-        (Some(_), Some(_)) => Err(
-            "JWT_PUBLIC_KEY_PEM and JWT_PUBLIC_KEY_PATH are mutually exclusive".to_string(),
-        ),
-        (Some(_), None) if production_env => {
-            Err("JWT_PUBLIC_KEY_PEM is forbidden in production; use JWT_PUBLIC_KEY_PATH".to_string())
+        (Some(_), Some(_)) => {
+            Err("JWT_PUBLIC_KEY_PEM and JWT_PUBLIC_KEY_PATH are mutually exclusive".to_string())
         }
+        (Some(_), None) if production_env => Err(
+            "JWT_PUBLIC_KEY_PEM is forbidden in production; use JWT_PUBLIC_KEY_PATH".to_string(),
+        ),
         (Some(pem), None) => Ok(pem.into_bytes()),
-        (None, Some(path)) => fs::read(&path)
-            .map_err(|e| format!("Failed to read JWT public key from {path}: {e}")),
+        (None, Some(path)) => {
+            fs::read(&path).map_err(|e| format!("Failed to read JWT public key from {path}: {e}"))
+        }
         (None, None) => Err("JWT_PUBLIC_KEY_PATH is required".to_string()),
     }
 }
