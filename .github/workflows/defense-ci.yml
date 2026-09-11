@@ -288,7 +288,7 @@ jobs:
       
       - name: Build container
         run: |
-          docker build -t rsrp-ultra:test .
+          docker build -f services/api-service/Dockerfile -t rsrp-ultra:test .
       
       - name: Run Trivy scanner
         uses: aquasecurity/trivy-action@master
