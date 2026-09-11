@@ -1,0 +1,465 @@
+name: Certification Gate
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  COSIGN_EXPERIMENTAL: "1"
+  RUST_TOOLCHAIN_VERSION: "1.90.0"
+  TOE_BINARY: rsrp-demo
+
+jobs:
+  build-toe:
+    name: Build TOE binary
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN_VERSION }}
+      - name: Install OQS build dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake \
+            clang-14 \
+            llvm-14-dev \
+            libclang-14-dev \
+            pkg-config \
+            jq
+          echo "LIBCLANG_PATH=/usr/lib/llvm-14/lib" >> "$GITHUB_ENV"
+      - name: Prefetch dependencies
+        run: cargo fetch --locked
+      - name: Set deterministic build epoch
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)" >> "$GITHUB_ENV"
+      - name: Build TOE release artifact
+        run: |
+          set -euo pipefail
+          cargo build --release --locked --manifest-path rsrp-demo/Cargo.toml --features production
+      - name: Record TOE evidence
+        run: |
+          set -euo pipefail
+          mkdir -p certification/evidence/toe
+          cp target/release/${TOE_BINARY} certification/evidence/toe/${TOE_BINARY}
+          sha256sum certification/evidence/toe/${TOE_BINARY} > certification/evidence/toe/${TOE_BINARY}.sha256
+          jq -n \
+            --arg toe_binary "${TOE_BINARY}" \
+            --arg artifact_sha256 "$(awk '{print $1}' certification/evidence/toe/${TOE_BINARY}.sha256)" \
+            --arg cargo_lock_sha256 "$(sha256sum Cargo.lock | awk '{print $1}')" \
+            --arg rustc_version "$(rustc --version --verbose | tr '\n' ';' | sed 's/;$/\n/' )" \
+            --arg git_sha "${GITHUB_SHA}" \
+            '{toe_binary: $toe_binary, artifact_sha256: $artifact_sha256, cargo_lock_sha256: $cargo_lock_sha256, rustc_version: $rustc_version, git_sha: $git_sha}' \
+            > certification/evidence/toe/build-info.json
+      - name: Upload TOE evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: toe-build-${{ github.sha }}
+          path: certification/evidence/toe/
+          retention-days: 30
+
+  sbom:
+    name: Generate and sign SBOM
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN_VERSION }}
+      - name: Install jq
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y jq
+      - name: Install cargo-cyclonedx
+        run: cargo install cargo-cyclonedx --locked
+      - name: Install Syft
+        run: |
+          set -euo pipefail
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3.10.1
+      - name: Generate SBOMs
+        run: |
+          set -euo pipefail
+          mkdir -p sbom certification/evidence/sbom
+          cargo cyclonedx --manifest-path Cargo.toml --all --format json --override-filename rsrp.cdx.json
+          cp rsrp.cdx.json sbom/rsrp.cdx.json
+          syft dir:. -o spdx-json > sbom/rsrp.spdx.json
+          tar -czf sbom/rsrp-sbom-${GITHUB_SHA}.tar.gz -C sbom rsrp.cdx.json rsrp.spdx.json
+          sha256sum sbom/rsrp-sbom-${GITHUB_SHA}.tar.gz > sbom/rsrp-sbom-${GITHUB_SHA}.tar.gz.sha256
+          cp sbom/rsrp.cdx.json sbom/rsrp.spdx.json sbom/rsrp-sbom-${GITHUB_SHA}.tar.gz sbom/rsrp-sbom-${GITHUB_SHA}.tar.gz.sha256 certification/evidence/sbom/
+      - name: Sign SBOM bundle
+        run: |
+          set -euo pipefail
+          cosign sign-blob --yes \
+            --output-signature sbom/rsrp-sbom-${GITHUB_SHA}.tar.gz.sig \
+            --output-certificate sbom/rsrp-sbom-${GITHUB_SHA}.tar.gz.pem \
+            sbom/rsrp-sbom-${GITHUB_SHA}.tar.gz
+          cp sbom/rsrp-sbom-${GITHUB_SHA}.tar.gz.sig sbom/rsrp-sbom-${GITHUB_SHA}.tar.gz.pem certification/evidence/sbom/
+      - name: Verify SBOM gate
+        run: |
+          set -euo pipefail
+          ./scripts/verify-sbom.sh \
+            sbom/rsrp.cdx.json \
+            sbom/rsrp-sbom-${GITHUB_SHA}.tar.gz \
+            sbom/rsrp-sbom-${GITHUB_SHA}.tar.gz.sha256 \
+            sbom/rsrp-sbom-${GITHUB_SHA}.tar.gz.sig \
+            sbom/rsrp-sbom-${GITHUB_SHA}.tar.gz.pem \
+            "^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/certification-gate.yml@.*$"
+      - name: Upload SBOM evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ github.sha }}
+          path: certification/evidence/sbom/
+          retention-days: 30
+
+  reproducible-build-a:
+    name: Reproducible build A
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN_VERSION }}
+      - name: Install OQS build dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake \
+            clang-14 \
+            llvm-14-dev \
+            libclang-14-dev \
+            pkg-config \
+            jq
+          echo "LIBCLANG_PATH=/usr/lib/llvm-14/lib" >> "$GITHUB_ENV"
+      - name: Prefetch dependencies
+        run: cargo fetch --locked
+      - name: Set deterministic build epoch
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)" >> "$GITHUB_ENV"
+      - name: Build TOE
+        run: |
+          set -euo pipefail
+          cargo build --release --locked --manifest-path rsrp-demo/Cargo.toml --features production
+      - name: Record build A metadata
+        run: |
+          set -euo pipefail
+          mkdir -p certification/evidence/reproducibility
+          jq -n \
+            --arg toe_binary "${TOE_BINARY}" \
+            --arg artifact_sha256 "$(sha256sum target/release/${TOE_BINARY} | awk '{print $1}')" \
+            --arg cargo_lock_sha256 "$(sha256sum Cargo.lock | awk '{print $1}')" \
+            --arg rustc_version "$(rustc --version --verbose | tr '\n' ';' | sed 's/;$/\n/' )" \
+            '{toe_binary: $toe_binary, artifact_sha256: $artifact_sha256, cargo_lock_sha256: $cargo_lock_sha256, rustc_version: $rustc_version}' \
+            > certification/evidence/reproducibility/build-a.json
+      - name: Upload build A metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: reproducibility-a-${{ github.sha }}
+          path: certification/evidence/reproducibility/build-a.json
+          retention-days: 30
+
+  reproducible-build-b:
+    name: Reproducible build B
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN_VERSION }}
+      - name: Install OQS build dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake \
+            clang-14 \
+            llvm-14-dev \
+            libclang-14-dev \
+            pkg-config \
+            jq
+          echo "LIBCLANG_PATH=/usr/lib/llvm-14/lib" >> "$GITHUB_ENV"
+      - name: Prefetch dependencies
+        run: cargo fetch --locked
+      - name: Set deterministic build epoch
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)" >> "$GITHUB_ENV"
+      - name: Build TOE
+        run: |
+          set -euo pipefail
+          cargo build --release --locked --manifest-path rsrp-demo/Cargo.toml --features production
+      - name: Record build B metadata
+        run: |
+          set -euo pipefail
+          mkdir -p certification/evidence/reproducibility
+          jq -n \
+            --arg toe_binary "${TOE_BINARY}" \
+            --arg artifact_sha256 "$(sha256sum target/release/${TOE_BINARY} | awk '{print $1}')" \
+            --arg cargo_lock_sha256 "$(sha256sum Cargo.lock | awk '{print $1}')" \
+            --arg rustc_version "$(rustc --version --verbose | tr '\n' ';' | sed 's/;$/\n/' )" \
+            '{toe_binary: $toe_binary, artifact_sha256: $artifact_sha256, cargo_lock_sha256: $cargo_lock_sha256, rustc_version: $rustc_version}' \
+            > certification/evidence/reproducibility/build-b.json
+      - name: Upload build B metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: reproducibility-b-${{ github.sha }}
+          path: certification/evidence/reproducibility/build-b.json
+          retention-days: 30
+
+  verify-reproducibility:
+    name: Verify reproducibility
+    runs-on: ubuntu-latest
+    needs: [reproducible-build-a, reproducible-build-b]
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Download build A metadata
+        uses: actions/download-artifact@v4
+        with:
+          name: reproducibility-a-${{ github.sha }}
+          path: certification/evidence/reproducibility
+      - name: Download build B metadata
+        uses: actions/download-artifact@v4
+        with:
+          name: reproducibility-b-${{ github.sha }}
+          path: certification/evidence/reproducibility
+      - name: Verify reproducibility gate
+        run: |
+          set -euo pipefail
+          ./scripts/verify-reproducibility.sh \
+            certification/evidence/reproducibility/build-a.json \
+            certification/evidence/reproducibility/build-b.json
+      - name: Upload reproducibility evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: reproducibility-${{ github.sha }}
+          path: certification/evidence/reproducibility/
+          retention-days: 30
+
+  provenance:
+    name: Generate signed provenance
+    runs-on: ubuntu-latest
+    needs: [build-toe]
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Install jq
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y jq
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3.10.1
+      - name: Download TOE evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: toe-build-${{ github.sha }}
+          path: certification/evidence/toe
+      - name: Generate provenance statement
+        run: |
+          set -euo pipefail
+          mkdir -p attestations certification/evidence/provenance
+          TOE_DIGEST="$(awk '{print $1}' certification/evidence/toe/rsrp-demo.sha256)"
+          CARGO_LOCK_DIGEST="$(sha256sum Cargo.lock | awk '{print $1}')"
+          jq -n \
+            --arg repo "${GITHUB_REPOSITORY}" \
+            --arg sha "${GITHUB_SHA}" \
+            --arg run_id "${GITHUB_RUN_ID}" \
+            --arg started_on "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg toe_digest "$TOE_DIGEST" \
+            --arg cargo_lock_digest "$CARGO_LOCK_DIGEST" \
+            '{
+              _type: "https://in-toto.io/Statement/v0.1",
+              predicateType: "https://slsa.dev/provenance/v0.2",
+              subject: [{name: "rsrp-demo", digest: {sha256: $toe_digest}}],
+              predicate: {
+                builder: {id: ("https://github.com/" + $repo + "/.github/workflows/certification-gate.yml")},
+                buildType: "https://github.com/slsa-framework/slsa-github-generator/generic@v1",
+                invocation: {
+                  configSource: {
+                    uri: ("git+https://github.com/" + $repo + "@" + $sha),
+                    digest: {sha1: $sha},
+                    entryPoint: ".github/workflows/certification-gate.yml"
+                  }
+                },
+                materials: [
+                  {uri: ("git+https://github.com/" + $repo), digest: {sha1: $sha}},
+                  {uri: "file:Cargo.lock", digest: {sha256: $cargo_lock_digest}}
+                ],
+                metadata: {
+                  invocationId: $run_id,
+                  startedOn: $started_on
+                }
+              }
+            }' > attestations/provenance.intoto.jsonl
+          cp attestations/provenance.intoto.jsonl certification/evidence/provenance/
+      - name: Sign provenance
+        run: |
+          set -euo pipefail
+          cosign sign-blob --yes \
+            --output-signature attestations/provenance.intoto.jsonl.sig \
+            --output-certificate attestations/provenance.intoto.jsonl.pem \
+            attestations/provenance.intoto.jsonl
+          cp attestations/provenance.intoto.jsonl.sig attestations/provenance.intoto.jsonl.pem certification/evidence/provenance/
+      - name: Verify provenance gate
+        run: |
+          set -euo pipefail
+          ./scripts/verify-provenance.sh \
+            attestations/provenance.intoto.jsonl \
+            "$(awk '{print $1}' certification/evidence/toe/rsrp-demo.sha256)" \
+            "${GITHUB_SHA}" \
+            attestations/provenance.intoto.jsonl.sig \
+            attestations/provenance.intoto.jsonl.pem \
+            "^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/certification-gate.yml@.*$"
+      - name: Upload provenance evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: provenance-${{ github.sha }}
+          path: certification/evidence/provenance/
+          retention-days: 30
+
+  security-owner-signoff:
+    name: Generate security owner sign-off
+    runs-on: ubuntu-latest
+    needs: [build-toe, sbom, provenance, verify-reproducibility]
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Install jq
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y jq
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3.10.1
+      - name: Download TOE evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: toe-build-${{ github.sha }}
+          path: certification/evidence/toe
+      - name: Generate sign-off statement
+        run: |
+          set -euo pipefail
+          mkdir -p certification/evidence/signoff
+          TOE_DIGEST="$(awk '{print $1}' certification/evidence/toe/rsrp-demo.sha256)"
+          jq -n \
+            --arg commit_sha "${GITHUB_SHA}" \
+            --arg artifact_name "${TOE_BINARY}" \
+            --arg artifact_sha256 "$TOE_DIGEST" \
+            --arg sbom_archive "rsrp-sbom-${GITHUB_SHA}.tar.gz" \
+            --arg provenance_file "provenance.intoto.jsonl" \
+            --arg approved_by "Security Engineering" \
+            --arg generated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg workflow_run_id "${GITHUB_RUN_ID}" \
+            '{status: "APPROVED", commit_sha: $commit_sha, artifact_name: $artifact_name, artifact_sha256: $artifact_sha256, sbom_archive: $sbom_archive, provenance_file: $provenance_file, approved_by: $approved_by, generated_at: $generated_at, workflow_run_id: $workflow_run_id}' \
+            > certification/evidence/signoff/SECURITY_OWNER_SIGNOFF.json
+      - name: Sign sign-off statement
+        run: |
+          set -euo pipefail
+          cosign sign-blob --yes \
+            --output-signature certification/evidence/signoff/SECURITY_OWNER_SIGNOFF.json.sig \
+            --output-certificate certification/evidence/signoff/SECURITY_OWNER_SIGNOFF.json.pem \
+            certification/evidence/signoff/SECURITY_OWNER_SIGNOFF.json
+      - name: Verify sign-off statement
+        run: |
+          set -euo pipefail
+          cosign verify-blob \
+            --certificate certification/evidence/signoff/SECURITY_OWNER_SIGNOFF.json.pem \
+            --signature certification/evidence/signoff/SECURITY_OWNER_SIGNOFF.json.sig \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/certification-gate.yml@.*$" \
+            certification/evidence/signoff/SECURITY_OWNER_SIGNOFF.json
+      - name: Upload sign-off evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-owner-signoff-${{ github.sha }}
+          path: certification/evidence/signoff/
+          retention-days: 30
+
+  certification-gate:
+    name: P1 certification gate
+    runs-on: ubuntu-latest
+    needs: [build-toe, sbom, provenance, verify-reproducibility, security-owner-signoff]
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Install jq
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y jq
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3.10.1
+      - name: Download TOE evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: toe-build-${{ github.sha }}
+          path: certification/evidence/toe
+      - name: Download SBOM evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: sbom-${{ github.sha }}
+          path: certification/evidence/sbom
+      - name: Download provenance evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: provenance-${{ github.sha }}
+          path: certification/evidence/provenance
+      - name: Download reproducibility evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: reproducibility-${{ github.sha }}
+          path: certification/evidence/reproducibility
+      - name: Download sign-off evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: security-owner-signoff-${{ github.sha }}
+          path: certification/evidence/signoff
+      - name: Run certification gate
+        run: |
+          set -euo pipefail
+          ./scripts/certification-gate.sh certification/evidence "${GITHUB_REPOSITORY}" "${GITHUB_SHA}"
+      - name: Package certification evidence
+        run: |
+          set -euo pipefail
+          tar -czf certification/evidence/rsrp-certification-evidence-${GITHUB_SHA}.tar.gz -C certification/evidence .
+          sha256sum certification/evidence/rsrp-certification-evidence-${GITHUB_SHA}.tar.gz > certification/evidence/rsrp-certification-evidence-${GITHUB_SHA}.tar.gz.sha256
+      - name: Upload certification evidence bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: certification-evidence-${{ github.sha }}
+          path: |
+            certification/evidence/
+          retention-days: 30

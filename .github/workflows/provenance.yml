@@ -1,0 +1,107 @@
+name: Provenance
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  COSIGN_EXPERIMENTAL: "1"
+
+jobs:
+  provenance:
+    name: Generate signed in-toto provenance
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install jq
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y jq
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3.10.1
+
+      - name: Download TOE evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: toe-build-${{ github.sha }}
+          path: certification/evidence/toe
+
+      - name: Generate provenance statement
+        run: |
+          set -euo pipefail
+          mkdir -p attestations certification/evidence/provenance
+          TOE_DIGEST="$(awk '{print $1}' certification/evidence/toe/rsrp-demo.sha256)"
+          CARGO_LOCK_DIGEST="$(sha256sum Cargo.lock | awk '{print $1}')"
+          jq -n \
+            --arg repo "${GITHUB_REPOSITORY}" \
+            --arg ref "${GITHUB_REF}" \
+            --arg sha "${GITHUB_SHA}" \
+            --arg run_id "${GITHUB_RUN_ID}" \
+            --arg started_on "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg toe_digest "$TOE_DIGEST" \
+            --arg cargo_lock_digest "$CARGO_LOCK_DIGEST" \
+            '{
+              _type: "https://in-toto.io/Statement/v0.1",
+              predicateType: "https://slsa.dev/provenance/v0.2",
+              subject: [{name: "rsrp-demo", digest: {sha256: $toe_digest}}],
+              predicate: {
+                builder: {id: ("https://github.com/" + $repo + "/.github/workflows/provenance.yml")},
+                buildType: "https://github.com/slsa-framework/slsa-github-generator/generic@v1",
+                invocation: {
+                  configSource: {
+                    uri: ("git+https://github.com/" + $repo + "@" + $sha),
+                    digest: {sha1: $sha},
+                    entryPoint: ".github/workflows/provenance.yml"
+                  }
+                },
+                materials: [
+                  {uri: ("git+https://github.com/" + $repo), digest: {sha1: $sha}},
+                  {uri: "file:Cargo.lock", digest: {sha256: $cargo_lock_digest}}
+                ],
+                metadata: {
+                  invocationId: $run_id,
+                  startedOn: $started_on
+                }
+              }
+            }' > attestations/provenance.intoto.jsonl
+          cp attestations/provenance.intoto.jsonl certification/evidence/provenance/
+
+      - name: Sign provenance
+        run: |
+          set -euo pipefail
+          cosign sign-blob --yes \
+            --output-signature attestations/provenance.intoto.jsonl.sig \
+            --output-certificate attestations/provenance.intoto.jsonl.pem \
+            attestations/provenance.intoto.jsonl
+          cp attestations/provenance.intoto.jsonl.sig certification/evidence/provenance/
+          cp attestations/provenance.intoto.jsonl.pem certification/evidence/provenance/
+
+      - name: Verify provenance
+        run: |
+          set -euo pipefail
+          ./scripts/verify-provenance.sh \
+            attestations/provenance.intoto.jsonl \
+            "$(awk '{print $1}' certification/evidence/toe/rsrp-demo.sha256)" \
+            "${GITHUB_SHA}" \
+            attestations/provenance.intoto.jsonl.sig \
+            attestations/provenance.intoto.jsonl.pem \
+            "^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/provenance.yml@.*$"
+
+      - name: Upload provenance evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: provenance-${{ github.sha }}
+          path: certification/evidence/provenance/
+          retention-days: 30

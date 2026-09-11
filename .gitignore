@@ -3,3 +3,14 @@ fuzz/artifacts/
 fuzz/corpus/
 fuzz/target/
 *.code-workspace
+# Generated certification evidence
+certification/evidence/**
+!certification/evidence/.gitkeep
+sbom/*.json
+sbom/*.tar.gz
+sbom/*.sha256
+sbom/*.sig
+sbom/*.pem
+attestations/*.jsonl
+attestations/*.sig
+attestations/*.pem
