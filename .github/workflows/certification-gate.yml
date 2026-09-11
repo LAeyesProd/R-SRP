@@ -349,6 +349,8 @@ jobs:
     name: Generate security owner sign-off
     runs-on: ubuntu-latest
     needs: [build-toe, sbom, provenance, verify-reproducibility]
+    environment:
+      name: security-owner-signoff
     permissions:
       contents: read
       id-token: write
@@ -367,6 +369,15 @@ jobs:
         with:
           name: toe-build-${{ github.sha }}
           path: certification/evidence/toe
+      - name: Require protected approval context
+        env:
+          SECURITY_SIGNOFF_SENTINEL: ${{ secrets.SECURITY_SIGNOFF_SENTINEL }}
+        run: |
+          set -euo pipefail
+          [ -n "${SECURITY_SIGNOFF_SENTINEL}" ] || {
+            echo "missing environment secret SECURITY_SIGNOFF_SENTINEL for protected security approval" >&2
+            exit 1
+          }
       - name: Generate sign-off statement
         run: |
           set -euo pipefail
@@ -378,10 +389,11 @@ jobs:
             --arg artifact_sha256 "$TOE_DIGEST" \
             --arg sbom_archive "rsrp-sbom-${GITHUB_SHA}.tar.gz" \
             --arg provenance_file "provenance.intoto.jsonl" \
-            --arg approved_by "Security Engineering" \
+            --arg approved_by "GitHub protected environment approval" \
+            --arg approval_environment "security-owner-signoff" \
             --arg generated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --arg workflow_run_id "${GITHUB_RUN_ID}" \
-            '{status: "APPROVED", commit_sha: $commit_sha, artifact_name: $artifact_name, artifact_sha256: $artifact_sha256, sbom_archive: $sbom_archive, provenance_file: $provenance_file, approved_by: $approved_by, generated_at: $generated_at, workflow_run_id: $workflow_run_id}' \
+            '{status: "APPROVED", commit_sha: $commit_sha, artifact_name: $artifact_name, artifact_sha256: $artifact_sha256, sbom_archive: $sbom_archive, provenance_file: $provenance_file, approved_by: $approved_by, approval_environment: $approval_environment, approval_enforced: true, generated_at: $generated_at, workflow_run_id: $workflow_run_id}' \
             > certification/evidence/signoff/SECURITY_OWNER_SIGNOFF.json
       - name: Sign sign-off statement
         run: |
@@ -454,8 +466,12 @@ jobs:
       - name: Package certification evidence
         run: |
           set -euo pipefail
-          tar -czf certification/evidence/rsrp-certification-evidence-${GITHUB_SHA}.tar.gz -C certification/evidence .
-          sha256sum certification/evidence/rsrp-certification-evidence-${GITHUB_SHA}.tar.gz > certification/evidence/rsrp-certification-evidence-${GITHUB_SHA}.tar.gz.sha256
+          BUNDLE_BASENAME="rsrp-certification-evidence-${GITHUB_SHA}.tar.gz"
+          BUNDLE_PATH="${RUNNER_TEMP}/${BUNDLE_BASENAME}"
+          tar -czf "${BUNDLE_PATH}" -C certification/evidence .
+          sha256sum "${BUNDLE_PATH}" > "${BUNDLE_PATH}.sha256"
+          mv "${BUNDLE_PATH}" certification/evidence/
+          mv "${BUNDLE_PATH}.sha256" certification/evidence/
       - name: Upload certification evidence bundle
         uses: actions/upload-artifact@v4
         with:

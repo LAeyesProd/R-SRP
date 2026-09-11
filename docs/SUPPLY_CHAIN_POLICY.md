@@ -43,6 +43,7 @@ This policy enforces verifiable software integrity from source to released artif
 ## 7. Operational Controls
 
 - Two-person review required for dependency policy exceptions.
+- P1 certification sign-off must use the protected GitHub environment `security-owner-signoff` with required reviewers and the environment secret `SECURITY_SIGNOFF_SENTINEL`.
 - Exception entries must include:
   - risk statement,
   - ticket/issue link,
