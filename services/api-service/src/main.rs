@@ -724,9 +724,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let audit_read_routes = Router::new()
         .route("/audit/chain/verify", get(handlers::verify_chain))
-        .route("/audit/daily/{date}/root", get(handlers::get_daily_root))
+        .route("/audit/daily/:date/root", get(handlers::get_daily_root))
         .route(
-            "/audit/daily/{date}/verify",
+            "/audit/daily/:date/verify",
             get(handlers::verify_daily_publication),
         )
         .route_layer(from_fn_with_state(
@@ -779,7 +779,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_state(state);
 
     // Start server
-    let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
+    let addr: SocketAddr = std::env::var("API_BIND_ADDR")
+        .unwrap_or_else(|_| "0.0.0.0:8080".to_string())
+        .parse()
+        .map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("Invalid API_BIND_ADDR: {e}"),
+            )
+        })?;
     tracing::info!("Listening on {}", addr);
 
     if tls_enabled {

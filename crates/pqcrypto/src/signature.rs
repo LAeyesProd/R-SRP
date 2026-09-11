@@ -447,18 +447,18 @@ mod tests {
 
     #[test]
     fn test_dilithium_key_sizes() {
-        let dilithium2 = Dilithium::new(DilithiumLevel::Dilithium2);
-        let (public_key, secret_key) = dilithium2.generate_keypair().unwrap();
-        let signature = dilithium2.sign(&secret_key, b"size-check").unwrap();
+        let dilithium = Dilithium::new(crate::PRODUCTION_DEFAULT_DILITHIUM_LEVEL);
+        let (public_key, secret_key) = dilithium.generate_keypair().unwrap();
+        let signature = dilithium.sign(&secret_key, b"size-check").unwrap();
 
-        assert_eq!(public_key.key.len(), dilithium2.level.public_key_size());
-        assert_eq!(secret_key.key.len(), dilithium2.level.secret_key_size());
-        assert!(signature.signature.len() <= dilithium2.level.signature_size());
+        assert_eq!(public_key.key.len(), dilithium.level.public_key_size());
+        assert_eq!(secret_key.key.len(), dilithium.level.secret_key_size());
+        assert!(signature.signature.len() <= dilithium.level.signature_size());
     }
 
     #[test]
     fn test_dilithium_sign_verify() {
-        let dilithium = Dilithium::new(DilithiumLevel::Dilithium2);
+        let dilithium = Dilithium::new(crate::PRODUCTION_DEFAULT_DILITHIUM_LEVEL);
         let (public_key, secret_key) = dilithium.generate_keypair().unwrap();
 
         let message = b"Test message for R-SRP Ultra";
@@ -470,7 +470,7 @@ mod tests {
 
     #[test]
     fn test_dilithium_verify_rejects_tampered_message() {
-        let dilithium = Dilithium::new(DilithiumLevel::Dilithium2);
+        let dilithium = Dilithium::new(crate::PRODUCTION_DEFAULT_DILITHIUM_LEVEL);
         let (public_key, secret_key) = dilithium.generate_keypair().unwrap();
         let sig = dilithium.sign(&secret_key, b"alpha").unwrap();
         assert!(!dilithium.verify(&public_key, b"beta", &sig).unwrap());

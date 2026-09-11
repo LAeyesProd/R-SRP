@@ -513,18 +513,22 @@ fn derive_hybrid_shared_secret(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        PRODUCTION_DEFAULT_DILITHIUM_LEVEL as SIGNATURE_LEVEL,
+        PRODUCTION_DEFAULT_KYBER_LEVEL as KEM_LEVEL,
+    };
 
     #[test]
     fn test_hybrid_signature() {
-        let signer = HybridSigner::new(DilithiumLevel::Dilithium2);
-        let verifier = HybridVerifier::new(DilithiumLevel::Dilithium2);
+        let signer = HybridSigner::new(SIGNATURE_LEVEL);
+        let verifier = HybridVerifier::new(SIGNATURE_LEVEL);
 
         let keypair = signer.generate_keypair().unwrap();
         let message = b"R-SRP Ultra test message";
 
         let signature = signer.sign(&keypair, message).unwrap();
         assert_eq!(signature.classical.len(), 64);
-        assert!(signature.quantum.signature.len() <= DilithiumLevel::Dilithium2.signature_size());
+        assert!(signature.quantum.signature.len() <= SIGNATURE_LEVEL.signature_size());
 
         let result = verifier.verify(&keypair, message, &signature);
         assert!(result.unwrap());
@@ -532,8 +536,8 @@ mod tests {
 
     #[test]
     fn test_hybrid_signature_rejects_tampered_classical_part() {
-        let signer = HybridSigner::new(DilithiumLevel::Dilithium2);
-        let verifier = HybridVerifier::new(DilithiumLevel::Dilithium2);
+        let signer = HybridSigner::new(SIGNATURE_LEVEL);
+        let verifier = HybridVerifier::new(SIGNATURE_LEVEL);
         let keypair = signer.generate_keypair().unwrap();
         let mut signature = signer.sign(&keypair, b"m").unwrap();
         signature.classical[0] ^= 0x55;
@@ -542,8 +546,8 @@ mod tests {
 
     #[test]
     fn test_hybrid_signature_rejects_tampered_quantum_part() {
-        let signer = HybridSigner::new(DilithiumLevel::Dilithium2);
-        let verifier = HybridVerifier::new(DilithiumLevel::Dilithium2);
+        let signer = HybridSigner::new(SIGNATURE_LEVEL);
+        let verifier = HybridVerifier::new(SIGNATURE_LEVEL);
         let keypair = signer.generate_keypair().unwrap();
         let mut signature = signer.sign(&keypair, b"m").unwrap();
         signature.quantum.signature[0] ^= 0x42;
@@ -552,8 +556,8 @@ mod tests {
 
     #[test]
     fn test_hybrid_signature_rejects_tampered_both_parts() {
-        let signer = HybridSigner::new(DilithiumLevel::Dilithium2);
-        let verifier = HybridVerifier::new(DilithiumLevel::Dilithium2);
+        let signer = HybridSigner::new(SIGNATURE_LEVEL);
+        let verifier = HybridVerifier::new(SIGNATURE_LEVEL);
         let keypair = signer.generate_keypair().unwrap();
         let mut signature = signer.sign(&keypair, b"m").unwrap();
         signature.classical[0] ^= 0x11;
@@ -563,8 +567,8 @@ mod tests {
 
     #[test]
     fn test_hybrid_signature_verify_public_only() {
-        let signer = HybridSigner::new(DilithiumLevel::Dilithium2);
-        let verifier = HybridVerifier::new(DilithiumLevel::Dilithium2);
+        let signer = HybridSigner::new(SIGNATURE_LEVEL);
+        let verifier = HybridVerifier::new(SIGNATURE_LEVEL);
         let keypair = signer.generate_keypair().unwrap();
         let public_key = keypair.public_key();
         let signature = signer.sign(&keypair, b"m").unwrap();
@@ -575,8 +579,8 @@ mod tests {
 
     #[test]
     fn test_hybrid_kem() {
-        let encapsulator = HybridKEMEncapsulator::new(KyberLevel::Kyber512);
-        let decapsulator = HybridKEMDecapsulator::new(KyberLevel::Kyber512);
+        let encapsulator = HybridKEMEncapsulator::new(KEM_LEVEL);
+        let decapsulator = HybridKEMDecapsulator::new(KEM_LEVEL);
 
         let keypair = encapsulator.generate_keypair().unwrap();
 
@@ -588,8 +592,8 @@ mod tests {
 
     #[test]
     fn test_hybrid_kem_rejects_tampered_classical_component() {
-        let encapsulator = HybridKEMEncapsulator::new(KyberLevel::Kyber512);
-        let decapsulator = HybridKEMDecapsulator::new(KyberLevel::Kyber512);
+        let encapsulator = HybridKEMEncapsulator::new(KEM_LEVEL);
+        let decapsulator = HybridKEMDecapsulator::new(KEM_LEVEL);
         let keypair = encapsulator.generate_keypair().unwrap();
 
         let (_, mut ciphertext) = encapsulator.encapsulate(&keypair).unwrap();
@@ -599,8 +603,8 @@ mod tests {
 
     #[test]
     fn test_hybrid_kem_rejects_tampered_quantum_component() {
-        let encapsulator = HybridKEMEncapsulator::new(KyberLevel::Kyber512);
-        let decapsulator = HybridKEMDecapsulator::new(KyberLevel::Kyber512);
+        let encapsulator = HybridKEMEncapsulator::new(KEM_LEVEL);
+        let decapsulator = HybridKEMDecapsulator::new(KEM_LEVEL);
         let keypair = encapsulator.generate_keypair().unwrap();
 
         let (_, mut ciphertext) = encapsulator.encapsulate(&keypair).unwrap();

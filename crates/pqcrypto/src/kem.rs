@@ -427,16 +427,15 @@ mod tests {
 
     #[test]
     fn test_kyber_key_sizes() {
-        let kyber512 = Kyber::new(KyberLevel::Kyber512);
-        assert_eq!(kyber512.level.public_key_size(), 800);
-        assert_eq!(kyber512.level.secret_key_size(), 1632);
-        assert_eq!(kyber512.level.ciphertext_size(), 768);
+        assert_eq!(KyberLevel::Kyber512.public_key_size(), 800);
+        assert_eq!(KyberLevel::Kyber512.secret_key_size(), 1632);
+        assert_eq!(KyberLevel::Kyber512.ciphertext_size(), 768);
         assert_eq!(KyberLevel::Kyber512.algorithm_id(), "ML-KEM-512");
     }
 
     #[test]
     fn test_kyber_kem() {
-        let kyber = Kyber::new(KyberLevel::Kyber512);
+        let kyber = Kyber::new(crate::PRODUCTION_DEFAULT_KYBER_LEVEL);
         let (public_key, secret_key) = kyber.generate_keypair().unwrap();
 
         let (shared_secret_1, ciphertext) = kyber.encapsulate(&public_key).unwrap();

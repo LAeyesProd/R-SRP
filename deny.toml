@@ -4,6 +4,7 @@ all-features = true
 
 [advisories]
 db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "deny"
 ignore = [
     # rustls stack currently pulls rustls-pemfile transitively; temporary accepted risk (DR-001).
     { id = "RUSTSEC-2025-0134", reason = "temporary accepted risk; see docs/DEPENDENCY_RISK_ASSESSMENT.md (DR-001) and docs/CERTIFICATION_BUNDLE.md ; tracked: https://github.com/LAeyesProd/R-SRP/issues/184 ; review-date: 2026-03-31" },
