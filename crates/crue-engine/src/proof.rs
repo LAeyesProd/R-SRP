@@ -108,6 +108,17 @@ pub struct ProofEnvelopeV1 {
     pub signature: SignatureV1,
 }
 
+/// Inputs required to bind a ProofEnvelopeV1 to one concrete execution.
+pub struct ProofEnvelopeV1VerificationContext<'a> {
+    pub bytecode: &'a Bytecode,
+    pub request: &'a EvaluationRequest,
+    pub context: &'a EvaluationContext,
+    pub expected_decision: Decision,
+    pub crypto_backend_id: &'a str,
+    pub expected_policy_hash_hex: &'a str,
+    pub expected_signer_key_id: &'a str,
+}
+
 impl ProofBinding {
     pub fn create(
         bytecode: &Bytecode,
@@ -452,6 +463,30 @@ impl ProofEnvelopeV1 {
         }
 
         self.verify_ed25519(public_key)
+    }
+
+    /// Recompute the expected binding from execution inputs before verifying the
+    /// envelope. `expected_policy_hash_hex` must identify the canonical policy
+    /// representation selected by the caller; it is never trusted from the
+    /// envelope itself.
+    pub fn verify_ed25519_with_context(
+        &self,
+        expected: &ProofEnvelopeV1VerificationContext<'_>,
+        public_key: &[u8],
+    ) -> Result<bool, String> {
+        let expected_binding = ProofBinding::create_with_policy_hash(
+            expected.bytecode,
+            expected.request,
+            expected.context,
+            expected.expected_decision,
+            expected.crypto_backend_id,
+            Some(expected.expected_policy_hash_hex),
+        )?;
+        self.verify_ed25519_with_binding(
+            &expected_binding,
+            expected.expected_signer_key_id,
+            public_key,
+        )
     }
 
     #[cfg(feature = "pq-proof")]
@@ -935,6 +970,9 @@ fn pack_runtime_version_u32(runtime_version: &str) -> Result<u32, String> {
             .map_err(|_| "invalid patch runtime version".to_string())?,
         _ => 0,
     };
+    if parts.next().is_some() {
+        return Err("runtime_version must contain at most major.minor.patch".to_string());
+    }
     if major > 0xFF || minor > 0xFF || patch > 0xFFFF {
         return Err("runtime_version component exceeds u32 packing limits".to_string());
     }
@@ -1243,6 +1281,12 @@ THEN
             pack_runtime_version_u32("0.9.99").unwrap()
         );
         assert_eq!(pack_runtime_version_u32("1.2.3").unwrap(), 0x01020003);
+        assert_eq!(pack_runtime_version_u32("255.255.65535").unwrap(), u32::MAX);
+        assert!(pack_runtime_version_u32("256.0.0").is_err());
+        assert!(pack_runtime_version_u32("0.256.0").is_err());
+        assert!(pack_runtime_version_u32("0.0.65536").is_err());
+        assert!(pack_runtime_version_u32("1.2.3.4").is_err());
+        assert!(pack_runtime_version_u32("1.2.3-rc.1").is_err());
     }
 
     #[cfg(feature = "pq-proof")]
