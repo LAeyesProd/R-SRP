@@ -292,7 +292,7 @@ fn parse_rate_limit_backend() -> Result<RateLimitBackend, std::io::Error> {
 }
 
 fn validate_audit_publication_signing_secret(secret: &str) -> Result<(), std::io::Error> {
-    if secret.as_bytes().len() < MIN_AUDIT_PUBLICATION_SIGNING_SECRET_BYTES {
+    if secret.len() < MIN_AUDIT_PUBLICATION_SIGNING_SECRET_BYTES {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             format!(
