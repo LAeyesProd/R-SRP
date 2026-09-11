@@ -9,9 +9,10 @@ jobs = 4
 # Linker arguments for security hardening
 # RELRO (Full), NOW (Bind Now) - prevents GOT overwrite attacks
 # PIE is enabled by default on modern GCC/Clang
+# Use PIC for host proc-macro shared libraries as well as PIE executables.
 # noexecstack - prevents stack execution
 rustflags = [
-  "-C", "relocation-model=pie",
+  "-C", "relocation-model=pic",
   "-C", "link-arg=-Wl,-z,relro,-z,now",
   "-C", "link-arg=-Wl,-z,noexecstack"
 ]
@@ -22,7 +23,7 @@ rustflags = [
 [target.aarch64-unknown-linux-gnu]
 # ARM64 security settings
 rustflags = [
-  "-C", "relocation-model=pie",
+  "-C", "relocation-model=pic",
   "-C", "link-arg=-Wl,-z,relro,-z,now",
   "-C", "link-arg=-Wl,-z,noexecstack"
 ]
