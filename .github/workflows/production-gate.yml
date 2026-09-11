@@ -352,6 +352,8 @@ jobs:
         run: |
           set -euo pipefail
           cargo test --locked -p rsrp-proof-engine -p rsrp-immutable-ledger -- --test-threads=1
+          cargo run --locked -p rsrp-proof-engine --example generate_proof_envelope_vectors
+          git diff --exit-code -- docs/PROOF_ENVELOPE_V1_TEST_VECTORS.json
           python3 scripts/interop/verify_proof_envelope_v1_vectors.py
           go run scripts/interop/verify_proof_envelope_v1_vectors.go
           npx --yes tsx scripts/interop/verify_proof_envelope_v1_vectors.ts
