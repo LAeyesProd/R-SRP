@@ -13,6 +13,7 @@ WORKDIR /app
 
 # Copy the complete workspace before resolving dependencies
 COPY Cargo.toml Cargo.lock ./
+COPY .cargo/config.toml .cargo/config.toml
 COPY crates ./crates
 COPY rsrp-demo ./rsrp-demo
 COPY services/api-service ./services/api-service
