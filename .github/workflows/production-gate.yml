@@ -100,7 +100,7 @@ jobs:
       - name: Ensure no mock backend in production feature graph
         run: |
           set -euo pipefail
-          cargo tree --manifest-path rsrp-demo/Cargo.toml -e features --features production > feature-tree.txt
+          cargo tree --manifest-path rsrp-demo/Cargo.toml -e features --features production --locked > feature-tree.txt
           if grep -E "mock-crypto" feature-tree.txt; then
             echo "mock-crypto detected in production graph"
             exit 1
@@ -160,14 +160,14 @@ jobs:
             ~/.cargo/bin/cargo-audit
             ~/.cargo/.crates2.json
             ~/.cargo/.crates.toml
-          key: ${{ runner.os }}-cargo-policy-tools-v1-deny0.19.0-audit0.22.1
+          key: ${{ runner.os }}-cargo-policy-tools-v1-deny0.19.0-audit0.22.2
 
       - name: Install policy tools
         if: steps.cache-policy-tools.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           cargo install cargo-deny --version 0.19.0 --locked
-          cargo install cargo-audit --version 0.22.1 --locked
+          cargo install cargo-audit --version 0.22.2 --locked
 
       - name: Enforce cargo-deny policy
         run: |
@@ -181,13 +181,16 @@ jobs:
           cargo audit
 
       - name: Reject non-crates.io dependency sources
+        shell: bash
         run: |
           set -euo pipefail
           cargo metadata --format-version=1 --locked > metadata.json
-          if jq -r '.packages[] | select(.source != null) | .source' metadata.json | grep -E '^git\+'; then
-            echo "git dependencies are forbidden by policy"
-            exit 1
-          fi
+          jq -e '
+            [.packages[]
+            | select(.source != null)
+            | select(.source != "registry+https://github.com/rust-lang/crates.io-index")
+            ] | length == 0
+          ' metadata.json
 
       - name: Generate CycloneDX SBOM (gating)
         run: |
