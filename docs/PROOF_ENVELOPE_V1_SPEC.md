@@ -3,6 +3,10 @@
 Status: `Draft (implementation-backed)`  
 Scope: `rsrp-proof-engine` proof attestation envelope format for deterministic verification and ledger embedding.
 
+Release note: the current workspace is the unreleased `0.10.0` development
+line. This format is not frozen until the Rust-generated fixture and all
+cross-language signature checks agree.
+
 ## 1. Purpose
 
 `ProofEnvelopeV1` defines a stable, canonical proof attestation payload with:
@@ -38,6 +42,8 @@ struct ProofEnvelopeV1 {
 - `encoding_version`: canonical binary encoding revision (`1`)
 - `runtime_version`: packed runtime semver `(major << 24) | (minor << 16) | patch`
   - example: `0.9.1` -> `0x00090001`
+  - valid ranges: major `0..=255`, minor `0..=255`, patch `0..=65535`
+  - pre-release/build suffixes are rejected by the v1 packer
 - `policy_hash`: SHA-256 of canonical serialized policy representation
   - current engine compiled path uses canonical serialized AST hash
 - `bytecode_hash`: SHA-256 of canonical serialized compiled bytecode (including action bytecode)
@@ -133,6 +139,9 @@ Verifier must:
 5. Verify signature over `signing_bytes`
 6. Recompute and compare hashes (`policy_hash`, `bytecode_hash`, `input_hash`, `state_hash`) against claimed execution context
 
+Signature verification without steps 1-3 and 6 is only a cryptographic
+primitive check and MUST NOT be treated as complete envelope verification.
+
 ## 9. Compatibility / Migration Rules
 
 - `ProofBinding` (legacy/dynamic) remains supported as an internal bridge
@@ -184,5 +193,5 @@ Canonical `signing_bytes` hex:
 Canonical `canonical_bytes` hex (includes signature length + signature bytes):
 
 ```text
-010100090001111111111111111111111111111111111111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222223333333333333333333333333333333333333333333333333333333333333333444444444444444444444444444444444444444444444444444444444444444402002101e7e331964026891ae93f6f0d4b20c19f95cf20d6c6ba87fd73e287b081a4620100000040e22e8f4b3ab834f4db936d865b8ded519e0aac395ca625c154840f37f7f571429e91b91f97652e4d84495d903bce814fde0d84bd6606ce854648bc064d25f106
+010100090001111111111111111111111111111111111111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222223333333333333333333333333333333333333333333333333333333333333333444444444444444444444444444444444444444444444444444444444444444402002101e7e331964026891ae93f6f0d4b20c19f95cf20d6c6ba87fd73e287b081a46201000000406dfc53cce34237ad8fdd62a3fc35b1221d18d7503971bdf73ec1f37d0cacfe002cc3405dfa2c046b66a68760c29c55a2fb8c130cc3d926a54645c771989dc000
 ```

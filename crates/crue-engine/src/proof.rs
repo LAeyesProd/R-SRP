@@ -108,6 +108,17 @@ pub struct ProofEnvelopeV1 {
     pub signature: SignatureV1,
 }
 
+/// Inputs required to bind a ProofEnvelopeV1 to one concrete execution.
+pub struct ProofEnvelopeV1VerificationContext<'a> {
+    pub bytecode: &'a Bytecode,
+    pub request: &'a EvaluationRequest,
+    pub context: &'a EvaluationContext,
+    pub expected_decision: Decision,
+    pub crypto_backend_id: &'a str,
+    pub expected_policy_hash_hex: &'a str,
+    pub expected_signer_key_id: &'a str,
+}
+
 impl ProofBinding {
     pub fn create(
         bytecode: &Bytecode,
@@ -297,6 +308,48 @@ impl PqProofEnvelope {
 }
 
 impl ProofEnvelopeV1 {
+    /// Validate the protocol-level invariants required by ProofEnvelope V1.
+    ///
+    /// Parsing and cryptographic verification are deliberately not sufficient on
+    /// their own: callers must never accept an envelope using an unsupported
+    /// schema/encoding revision or an unknown decision code.
+    pub fn validate_structure(&self) -> Result<(), String> {
+        if self.version != PROOF_ENVELOPE_V1_VERSION {
+            return Err(format!(
+                "unsupported ProofEnvelopeV1 version {}",
+                self.version
+            ));
+        }
+        if self.encoding_version != PROOF_ENVELOPE_V1_ENCODING_VERSION {
+            return Err(format!(
+                "unsupported ProofEnvelopeV1 encoding version {}",
+                self.encoding_version
+            ));
+        }
+        self.decision()?;
+        match &self.signature {
+            SignatureV1::Ed25519(sig) => {
+                if sig.key_id_hash == [0u8; 32] {
+                    return Err("empty Ed25519 key identity hash".to_string());
+                }
+                if sig.signature.len() != 64 {
+                    return Err("invalid Ed25519 signature length".to_string());
+                }
+            }
+            #[cfg(feature = "pq-proof")]
+            SignatureV1::Hybrid(sig) => {
+                dilithium_level_from_code(sig.level_code)?;
+                if sig.key_id_hash == [0u8; 32] {
+                    return Err("empty hybrid key identity hash".to_string());
+                }
+                if sig.backend_id_hash == [0u8; 32] {
+                    return Err("empty hybrid backend identity hash".to_string());
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn sign_ed25519(
         binding: &ProofBinding,
         signer_key_id: impl AsRef<str>,
@@ -351,6 +404,7 @@ impl ProofEnvelopeV1 {
     }
 
     pub fn verify_ed25519(&self, public_key: &[u8]) -> Result<bool, String> {
+        self.validate_structure()?;
         #[cfg(feature = "pq-proof")]
         let sig = match &self.signature {
             SignatureV1::Ed25519(sig) => sig,
@@ -368,11 +422,82 @@ impl ProofEnvelopeV1 {
         .map_err(|e| e.to_string())
     }
 
+    /// Verify the envelope and bind it to the expected signer identity and
+    /// ProofBinding. This is the fail-closed verification entry point for V1.
+    pub fn verify_ed25519_with_binding(
+        &self,
+        expected_binding: &ProofBinding,
+        expected_signer_key_id: &str,
+        public_key: &[u8],
+    ) -> Result<bool, String> {
+        self.validate_structure()?;
+        let expected = Self::unsigned_from_binding(
+            expected_binding,
+            SignatureV1::Ed25519(Ed25519SignatureV1 {
+                key_id_hash: sha256_fixed(expected_signer_key_id.as_bytes()),
+                signature: Vec::new(),
+            }),
+        )?;
+
+        #[cfg(feature = "pq-proof")]
+        let actual_signature = match &self.signature {
+            SignatureV1::Ed25519(signature) => signature,
+            SignatureV1::Hybrid(_) => return Ok(false),
+        };
+        #[cfg(not(feature = "pq-proof"))]
+        let SignatureV1::Ed25519(actual_signature) = &self.signature;
+        let expected_signature = match &expected.signature {
+            SignatureV1::Ed25519(signature) => signature,
+            #[cfg(feature = "pq-proof")]
+            SignatureV1::Hybrid(_) => unreachable!("constructed Ed25519 expectation"),
+        };
+
+        if self.version != expected.version
+            || self.encoding_version != expected.encoding_version
+            || self.runtime_version != expected.runtime_version
+            || self.policy_hash != expected.policy_hash
+            || self.bytecode_hash != expected.bytecode_hash
+            || self.input_hash != expected.input_hash
+            || self.state_hash != expected.state_hash
+            || self.decision_code != expected.decision_code
+            || actual_signature.key_id_hash != expected_signature.key_id_hash
+        {
+            return Ok(false);
+        }
+
+        self.verify_ed25519(public_key)
+    }
+
+    /// Recompute the expected binding from execution inputs before verifying the
+    /// envelope. `expected_policy_hash_hex` must identify the canonical policy
+    /// representation selected by the caller; it is never trusted from the
+    /// envelope itself.
+    pub fn verify_ed25519_with_context(
+        &self,
+        expected: &ProofEnvelopeV1VerificationContext<'_>,
+        public_key: &[u8],
+    ) -> Result<bool, String> {
+        let expected_binding = ProofBinding::create_with_policy_hash(
+            expected.bytecode,
+            expected.request,
+            expected.context,
+            expected.expected_decision,
+            expected.crypto_backend_id,
+            Some(expected.expected_policy_hash_hex),
+        )?;
+        self.verify_ed25519_with_binding(
+            &expected_binding,
+            expected.expected_signer_key_id,
+            public_key,
+        )
+    }
+
     #[cfg(feature = "pq-proof")]
     pub fn verify_hybrid(
         &self,
         public_key: &pqcrypto::hybrid::HybridPublicKey,
     ) -> Result<bool, String> {
+        self.validate_structure()?;
         let SignatureV1::Hybrid(sig) = &self.signature else {
             return Ok(false);
         };
@@ -447,7 +572,7 @@ impl ProofEnvelopeV1 {
             return Err("unexpected trailing bytes in ProofEnvelopeV1".to_string());
         }
 
-        Ok(Self {
+        let envelope = Self {
             version,
             encoding_version,
             runtime_version,
@@ -457,7 +582,9 @@ impl ProofEnvelopeV1 {
             state_hash,
             decision_code,
             signature,
-        })
+        };
+        envelope.validate_structure()?;
+        Ok(envelope)
     }
 
     pub fn decision(&self) -> Result<Decision, String> {
@@ -846,6 +973,9 @@ fn pack_runtime_version_u32(runtime_version: &str) -> Result<u32, String> {
             .map_err(|_| "invalid patch runtime version".to_string())?,
         _ => 0,
     };
+    if parts.next().is_some() {
+        return Err("runtime_version must contain at most major.minor.patch".to_string());
+    }
     if major > 0xFF || minor > 0xFF || patch > 0xFFFF {
         return Err("runtime_version component exceeds u32 packing limits".to_string());
     }
@@ -1080,12 +1210,84 @@ THEN
     }
 
     #[test]
+    fn test_proof_envelope_v1_rejects_unsupported_protocol_codes() {
+        let binding = ProofBinding {
+            serialization_version: 1,
+            schema_id: "rsrp.proof.binding.v1".to_string(),
+            runtime_version: "0.10.0".to_string(),
+            crypto_backend_id: "mock-crypto".to_string(),
+            policy_hash: fixed_hash_hex(0x11),
+            bytecode_hash: fixed_hash_hex(0x22),
+            input_hash: fixed_hash_hex(0x33),
+            state_hash: fixed_hash_hex(0x44),
+            decision: Decision::Block,
+        };
+        let kp = crypto_core::signature::Ed25519KeyPair::derive_from_secret(
+            b"rsrp-proof-envelope-v1-negative-tests",
+            Some("negative-test-key".into()),
+        );
+        let pk = kp.verifying_key();
+        let envelope = ProofEnvelopeV1::sign_ed25519(&binding, "negative-test-key", &kp).unwrap();
+
+        let mutations: [fn(&mut ProofEnvelopeV1); 3] = [
+            |candidate: &mut ProofEnvelopeV1| candidate.version = 2,
+            |candidate: &mut ProofEnvelopeV1| candidate.encoding_version = 2,
+            |candidate: &mut ProofEnvelopeV1| candidate.decision_code = 0,
+        ];
+        for mutate in mutations {
+            let mut candidate = envelope.clone();
+            mutate(&mut candidate);
+            assert!(candidate.verify_ed25519(&pk).is_err());
+        }
+    }
+
+    #[test]
+    fn test_proof_envelope_v1_context_binding_is_fail_closed() {
+        let binding = ProofBinding {
+            serialization_version: 1,
+            schema_id: "rsrp.proof.binding.v1".to_string(),
+            runtime_version: "0.10.0".to_string(),
+            crypto_backend_id: "mock-crypto".to_string(),
+            policy_hash: fixed_hash_hex(0x11),
+            bytecode_hash: fixed_hash_hex(0x22),
+            input_hash: fixed_hash_hex(0x33),
+            state_hash: fixed_hash_hex(0x44),
+            decision: Decision::Block,
+        };
+        let kp = crypto_core::signature::Ed25519KeyPair::derive_from_secret(
+            b"rsrp-proof-envelope-v1-context-test",
+            Some("context-test-key".into()),
+        );
+        let pk = kp.verifying_key();
+        let envelope = ProofEnvelopeV1::sign_ed25519(&binding, "context-test-key", &kp).unwrap();
+
+        assert!(envelope
+            .verify_ed25519_with_binding(&binding, "context-test-key", &pk)
+            .unwrap());
+        assert!(!envelope
+            .verify_ed25519_with_binding(&binding, "wrong-key-id", &pk)
+            .unwrap());
+
+        let mut altered_binding = binding.clone();
+        altered_binding.input_hash = fixed_hash_hex(0x55);
+        assert!(!envelope
+            .verify_ed25519_with_binding(&altered_binding, "context-test-key", &pk)
+            .unwrap());
+    }
+
+    #[test]
     fn test_pack_runtime_version_u32_includes_patch() {
         assert_ne!(
             pack_runtime_version_u32("0.9.4").unwrap(),
             pack_runtime_version_u32("0.9.99").unwrap()
         );
         assert_eq!(pack_runtime_version_u32("1.2.3").unwrap(), 0x01020003);
+        assert_eq!(pack_runtime_version_u32("255.255.65535").unwrap(), u32::MAX);
+        assert!(pack_runtime_version_u32("256.0.0").is_err());
+        assert!(pack_runtime_version_u32("0.256.0").is_err());
+        assert!(pack_runtime_version_u32("0.0.65536").is_err());
+        assert!(pack_runtime_version_u32("1.2.3.4").is_err());
+        assert!(pack_runtime_version_u32("1.2.3-rc.1").is_err());
     }
 
     #[cfg(feature = "pq-proof")]
