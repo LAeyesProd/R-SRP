@@ -76,7 +76,8 @@ jobs:
         run: |
           set -euo pipefail
           cargo install cargo-audit --version 0.22.1 --locked
-          cargo audit --config .cargo/audit.toml --json > audit.json
+          # cargo-audit automatically loads .cargo/audit.toml from the repository root.
+          cargo audit --json > audit.json
       
       - name: Check dependencies for banned
         run: |
