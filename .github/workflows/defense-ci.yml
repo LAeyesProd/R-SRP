@@ -359,41 +359,74 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      
-      - name: Build
-        run: cargo build --release --workspace
-      
-      - name: Generate SLSA provenance
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: binaries
+          path: artifacts/binaries
+
+      - name: Install jq
         run: |
-          cat > provenance.intoto.jsonl << 'EOF'
-          {
-            "_type": "https://in-toto.io/Statement/v0.1",
-            "predicateType": "https://slsa.dev/provenance/v0.2",
-            "subject": [
-              {
-                "name": "R-SRP",
-                "digest": {
-                  "sha256": "${{ github.sha }}"
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y jq
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3.10.1
+
+      - name: Generate signed SLSA provenance
+        run: |
+          set -euo pipefail
+          API_BINARY="artifacts/binaries/api-service"
+          [ -f "${API_BINARY}" ] || {
+            echo "missing build artifact: ${API_BINARY}" >&2
+            exit 1
+          }
+          API_DIGEST="$(sha256sum "${API_BINARY}" | awk '{print $1}')"
+          jq -n \
+            --arg repo "${GITHUB_REPOSITORY}" \
+            --arg sha "${GITHUB_SHA}" \
+            --arg run_id "${GITHUB_RUN_ID}" \
+            --arg started_on "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg artifact_name "api-service" \
+            --arg artifact_sha256 "${API_DIGEST}" \
+            '{
+              _type: "https://in-toto.io/Statement/v0.1",
+              predicateType: "https://slsa.dev/provenance/v0.2",
+              subject: [{name: $artifact_name, digest: {sha256: $artifact_sha256}}],
+              predicate: {
+                builder: {id: ("https://github.com/" + $repo + "/.github/workflows/defense-ci.yml")},
+                buildType: "https://github.com/slsa-framework/slsa-github-generator/generic@v1",
+                invocation: {
+                  configSource: {
+                    uri: ("git+https://github.com/" + $repo + "@" + $sha),
+                    digest: {sha1: $sha},
+                    entryPoint: ".github/workflows/defense-ci.yml"
+                  }
+                },
+                materials: [
+                  {uri: ("git+https://github.com/" + $repo), digest: {sha1: $sha}}
+                ],
+                metadata: {
+                  invocationId: $run_id,
+                  startedOn: $started_on
                 }
               }
-            ],
-            "predicate": {
-              "builder": {
-                "id": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-              },
-              "buildType": "https://github.com/Attestations/GitHubActionsWorkflow@v1",
-              "metadata": {
-                "invocationId": "${{ github.run_id }}"
-              }
-            }
-          }
-          EOF
-      
+            }' > provenance.intoto.jsonl
+          cosign sign-blob --yes \
+            --output-signature provenance.intoto.jsonl.sig \
+            --output-certificate provenance.intoto.jsonl.pem \
+            provenance.intoto.jsonl
+
       - name: Upload provenance
         uses: actions/upload-artifact@v4
         with:
           name: slsa-provenance
-          path: provenance.intoto.jsonl
+          path: |
+            provenance.intoto.jsonl
+            provenance.intoto.jsonl.sig
+            provenance.intoto.jsonl.pem
           retention-days: 365
 
   # Phase 8: Sign Release Artifacts
