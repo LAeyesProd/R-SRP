@@ -1,7 +1,7 @@
 {
   "schema": "rsrp.proof-envelope-v1.test-vectors",
   "version": 1,
-  "generated_from": "crates/crue-engine/src/proof.rs::test_proof_envelope_v1_ed25519_vector_fixture",
+  "generated_from": "crates/crue-engine/examples/generate_proof_envelope_vectors.rs",
   "vectors": [
     {
       "id": "ed25519_fixture_v1_block_00090001",
@@ -27,6 +27,38 @@
       "signature_bytes_hex": "6dfc53cce34237ad8fdd62a3fc35b1221d18d7503971bdf73ec1f37d0cacfe002cc3405dfa2c046b66a68760c29c55a2fb8c130cc3d926a54645c771989dc000",
       "canonical_bytes_hex": "010100090001111111111111111111111111111111111111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222223333333333333333333333333333333333333333333333333333333333333333444444444444444444444444444444444444444444444444444444444444444402002101e7e331964026891ae93f6f0d4b20c19f95cf20d6c6ba87fd73e287b081a46201000000406dfc53cce34237ad8fdd62a3fc35b1221d18d7503971bdf73ec1f37d0cacfe002cc3405dfa2c046b66a68760c29c55a2fb8c130cc3d926a54645c771989dc000",
       "canonical_bytes_sha256_hex": "c72a266eba1f5d5ea2f42a7dd97d6dbd6c5af285aca8a4f3c447b108e0c58a4f"
+    }
+  ],
+  "negative_cases": [
+    {
+      "id": "reject_tampered_signing_payload",
+      "source_vector": "ed25519_fixture_v1_block_00090001",
+      "mutation": "flip_signing_byte_6",
+      "expected_error": "INVALID_SIGNATURE"
+    },
+    {
+      "id": "reject_tampered_signature",
+      "source_vector": "ed25519_fixture_v1_block_00090001",
+      "mutation": "flip_last_signature_byte",
+      "expected_error": "INVALID_SIGNATURE"
+    },
+    {
+      "id": "reject_unsupported_version",
+      "source_vector": "ed25519_fixture_v1_block_00090001",
+      "mutation": "set_version_2",
+      "expected_error": "UNSUPPORTED_VERSION"
+    },
+    {
+      "id": "reject_unknown_decision",
+      "source_vector": "ed25519_fixture_v1_block_00090001",
+      "mutation": "set_decision_0",
+      "expected_error": "UNKNOWN_DECISION"
+    },
+    {
+      "id": "reject_trailing_bytes",
+      "source_vector": "ed25519_fixture_v1_block_00090001",
+      "mutation": "append_zero_byte",
+      "expected_error": "TRAILING_BYTES"
     }
   ]
 }
