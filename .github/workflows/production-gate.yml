@@ -177,7 +177,8 @@ jobs:
       - name: Enforce cargo-audit policy
         run: |
           set -euo pipefail
-          cargo audit --config .cargo/audit.toml
+          # cargo-audit automatically loads .cargo/audit.toml from the repository root.
+          cargo audit
 
       - name: Reject non-crates.io dependency sources
         run: |
