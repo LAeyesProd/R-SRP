@@ -30,7 +30,7 @@ Out of entropy boundary:
 | `crates/pqcrypto/src/hybrid.rs` (Ed25519/X25519 generation) | `OsRng` | Allowed (`real-crypto` / `production`) | Build/profile gates forbid mock-only production |
 | `crates/pqcrypto/src/kem.rs`, `crates/pqcrypto/src/signature.rs` mock paths | `thread_rng` | Forbidden in production/release | Compile-time guards reject mock in release/production |
 | `crates/crypto-core/src/hsm.rs` (`SoftHSM`) | `OsRng` for test-key generation | Forbidden in production | Runtime rejects `SoftHSM` in production and requires explicit opt-in outside tests (`RSRP_ALLOW_SOFT_HSM=1`) |
-| `services/api-service` publication software signer | Deterministic `derive_from_secret` from externally managed secret | Forbidden in production | Boot fails in production if software signer is selected |
+| `services/api-service` publication software signer | Deterministic `derive_from_secret` from externally managed secret | Forbidden in production | Boot fails in production if software signer is selected; outside production the provider must be explicitly set to `software-ed25519` and the secret must be at least 32 bytes |
 
 ## 4. Operational Requirements
 
@@ -57,4 +57,3 @@ This boundary must be reviewed whenever:
 - production feature policy changes,
 - key custody model changes (software signer/HSM/KMS),
 - deployment architecture changes (container, VM, hostile-host assumptions).
-

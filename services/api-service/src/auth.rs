@@ -65,15 +65,42 @@ fn parse_jwt_algorithm(raw: &str) -> Result<Algorithm, String> {
     }
 }
 
-fn read_public_key_pem() -> Result<Vec<u8>, String> {
-    if let Ok(pem) = env::var("JWT_PUBLIC_KEY_PEM") {
-        if !pem.trim().is_empty() {
-            return Ok(pem.into_bytes());
-        }
-    }
+fn env_var_if_present(name: &str) -> Option<String> {
+    env::var(name).ok().filter(|v| !v.trim().is_empty())
+}
 
-    let path = required_env("JWT_PUBLIC_KEY_PATH")?;
-    fs::read(&path).map_err(|e| format!("Failed to read JWT public key from {path}: {e}"))
+fn is_production_environment() -> bool {
+    [env::var("ENV").ok(), env::var("APP_ENV").ok(), env::var("RUST_ENV").ok()]
+        .into_iter()
+        .flatten()
+        .any(|v| matches!(v.to_ascii_lowercase().as_str(), "prod" | "production"))
+}
+
+fn read_public_key_pem_from_sources(
+    inline_pem: Option<String>,
+    path: Option<String>,
+    production_env: bool,
+) -> Result<Vec<u8>, String> {
+    match (inline_pem, path) {
+        (Some(_), Some(_)) => Err(
+            "JWT_PUBLIC_KEY_PEM and JWT_PUBLIC_KEY_PATH are mutually exclusive".to_string(),
+        ),
+        (Some(_), None) if production_env => {
+            Err("JWT_PUBLIC_KEY_PEM is forbidden in production; use JWT_PUBLIC_KEY_PATH".to_string())
+        }
+        (Some(pem), None) => Ok(pem.into_bytes()),
+        (None, Some(path)) => fs::read(&path)
+            .map_err(|e| format!("Failed to read JWT public key from {path}: {e}")),
+        (None, None) => Err("JWT_PUBLIC_KEY_PATH is required".to_string()),
+    }
+}
+
+fn read_public_key_pem() -> Result<Vec<u8>, String> {
+    read_public_key_pem_from_sources(
+        env_var_if_present("JWT_PUBLIC_KEY_PEM"),
+        env_var_if_present("JWT_PUBLIC_KEY_PATH"),
+        is_production_environment(),
+    )
 }
 
 fn build_validation(algorithm: Algorithm, issuer: &str, audience: &str) -> Validation {
@@ -225,5 +252,30 @@ mod tests {
         let v = build_validation(Algorithm::EdDSA, "issuer-a", "audience-a");
         assert!(v.required_spec_claims.contains("iss"));
         assert!(v.required_spec_claims.contains("aud"));
+    }
+
+    #[test]
+    fn test_read_public_key_pem_rejects_ambiguous_sources() {
+        let err = read_public_key_pem_from_sources(
+            Some("inline".to_string()),
+            Some("/tmp/public.pem".to_string()),
+            false,
+        )
+        .expect_err("ambiguous config must fail");
+        assert!(err.contains("mutually exclusive"));
+    }
+
+    #[test]
+    fn test_read_public_key_pem_rejects_inline_pem_in_production() {
+        let err = read_public_key_pem_from_sources(Some("inline".to_string()), None, true)
+            .expect_err("production inline pem must fail");
+        assert!(err.contains("forbidden in production"));
+    }
+
+    #[test]
+    fn test_read_public_key_pem_accepts_inline_pem_outside_production() {
+        let pem = read_public_key_pem_from_sources(Some("inline".to_string()), None, false)
+            .expect("non-production inline pem allowed");
+        assert_eq!(pem, b"inline");
     }
 }
