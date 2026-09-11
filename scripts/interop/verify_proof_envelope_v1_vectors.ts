@@ -12,6 +12,10 @@ type Vector = {
   signer_key_id: string;
   ed25519_public_key_hex: string;
   signature_bytes_hex: string;
+  policy_hash_hex: string;
+  bytecode_hash_hex: string;
+  input_hash_hex: string;
+  state_hash_hex: string;
   signing_bytes_len: number;
   signing_bytes_hex: string;
   canonical_bytes_len: number;
@@ -34,6 +38,22 @@ function hexToBuf(hex: string): Buffer {
 function verifyVector(v: Vector): void {
   const signing = hexToBuf(v.signing_bytes_hex);
   const canonical = hexToBuf(v.canonical_bytes_hex);
+  const keyHash = crypto.createHash("sha256").update(v.signer_key_id, "utf8").digest();
+  const metadata = Buffer.concat([Buffer.from([v.signature_algorithm_code]), keyHash]);
+  const metaLength = Buffer.alloc(2);
+  metaLength.writeUInt16BE(metadata.length);
+  const reconstructed = Buffer.concat([
+    Buffer.from([v.proof_envelope_version, v.encoding_version]),
+    hexToBuf(v.runtime_version_packed_u32_be_hex),
+    hexToBuf(v.policy_hash_hex),
+    hexToBuf(v.bytecode_hash_hex),
+    hexToBuf(v.input_hash_hex),
+    hexToBuf(v.state_hash_hex),
+    Buffer.from([v.decision_code]),
+    metaLength,
+    metadata,
+  ]);
+  if (!reconstructed.equals(signing)) throw new Error(`${v.id}: semantic reconstruction mismatch`);
 
   if (signing.length !== v.signing_bytes_len) throw new Error(`${v.id}: signing len mismatch`);
   if (canonical.length !== v.canonical_bytes_len) throw new Error(`${v.id}: canonical len mismatch`);
@@ -60,7 +80,6 @@ function verifyVector(v: Vector): void {
   if (meta[0] !== v.signature_algorithm_code) throw new Error(`${v.id}: algorithm code mismatch`);
   if (v.kind === "ed25519") {
     if (metaLen !== 33) throw new Error(`${v.id}: invalid Ed25519 metadata length`);
-    const keyHash = crypto.createHash("sha256").update(v.signer_key_id, "utf8").digest();
     if (!meta.subarray(1).equals(keyHash)) throw new Error(`${v.id}: signer key id hash mismatch`);
     if (sigLen !== 64) throw new Error(`${v.id}: invalid Ed25519 signature length`);
     if (sig.toString("hex") !== v.signature_bytes_hex) throw new Error(`${v.id}: signature bytes mismatch`);
@@ -71,6 +90,9 @@ function verifyVector(v: Vector): void {
       type: "spki",
     });
     if (!crypto.verify(null, signing, publicKey, sig)) throw new Error(`${v.id}: Ed25519 signature verification failed`);
+    const tampered = Buffer.from(signing);
+    tampered[6] ^= 1;
+    if (crypto.verify(null, tampered, publicKey, sig)) throw new Error(`${v.id}: tampered payload signature accepted`);
   }
 
   const digest = crypto.createHash("sha256").update(canonical).digest("hex");
