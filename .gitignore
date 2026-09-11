@@ -14,3 +14,5 @@ sbom/*.pem
 attestations/*.jsonl
 attestations/*.sig
 attestations/*.pem
+**/rsrp.cdx.json
+**/rsrp.cdx.json.json

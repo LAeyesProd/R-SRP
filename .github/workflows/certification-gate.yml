@@ -97,8 +97,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p sbom certification/evidence/sbom
-          cargo cyclonedx --manifest-path Cargo.toml --all --format json --override-filename rsrp.cdx.json
-          cp rsrp.cdx.json sbom/rsrp.cdx.json
+          cargo cyclonedx --manifest-path rsrp-demo/Cargo.toml --all --format json --override-filename rsrp.cdx
+          cp rsrp-demo/rsrp.cdx.json sbom/rsrp.cdx.json
           syft dir:. -o spdx-json > sbom/rsrp.spdx.json
           tar -czf sbom/rsrp-sbom-${GITHUB_SHA}.tar.gz -C sbom rsrp.cdx.json rsrp.spdx.json
           sha256sum sbom/rsrp-sbom-${GITHUB_SHA}.tar.gz > sbom/rsrp-sbom-${GITHUB_SHA}.tar.gz.sha256
