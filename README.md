@@ -6,7 +6,7 @@ Deterministic security runtime for verifiable decisions:
 
 ## Status
 
-- Release line: `0.9.4`
+- Development line: `0.10.0`
 - Maturity: pre-1.0 hardened runtime
 - Language: Rust workspace (multi-crate)
 
@@ -18,7 +18,8 @@ Deterministic security runtime for verifiable decisions:
 - `rsrp-proof-engine`
 - `rsrp-immutable-ledger`
 
-Published on crates.io under `0.9.4`.
+The last documented crates.io release is `0.9.4`; the current workspace is the
+unreleased `0.10.0` development line.
 
 ## What Was Hardened in 0.9.4
 
@@ -49,7 +50,8 @@ ProofEnvelope vector checks:
 
 ```bash
 python scripts/interop/verify_proof_envelope_v1_vectors.py
-node scripts/interop/verify_proof_envelope_v1_vectors.ts
+go run scripts/interop/verify_proof_envelope_v1_vectors.go
+npx --yes tsx scripts/interop/verify_proof_envelope_v1_vectors.ts
 ```
 
 ## Release validation
