@@ -34,9 +34,63 @@ type vector struct {
 }
 
 type vectorDoc struct {
-	Schema  string   `json:"schema"`
-	Version int      `json:"version"`
-	Vectors []vector `json:"vectors"`
+	Schema        string         `json:"schema"`
+	Version       int            `json:"version"`
+	Vectors       []vector       `json:"vectors"`
+	NegativeCases []negativeCase `json:"negative_cases"`
+}
+
+type negativeCase struct {
+	ID            string `json:"id"`
+	SourceVector  string `json:"source_vector"`
+	Mutation      string `json:"mutation"`
+	ExpectedError string `json:"expected_error"`
+}
+
+func verifyNegativeCase(test negativeCase, vectors map[string]vector) {
+	source, ok := vectors[test.SourceVector]
+	if !ok {
+		fail("%s: source vector not found", test.ID)
+	}
+	signing, _ := hex.DecodeString(source.SigningBytesHex)
+	canonical, _ := hex.DecodeString(source.CanonicalBytesHex)
+	switch test.Mutation {
+	case "flip_signing_byte_6":
+		signing[6] ^= 1
+		canonical[6] ^= 1
+	case "flip_last_signature_byte":
+		canonical[len(canonical)-1] ^= 1
+	case "set_version_2":
+		signing[0], canonical[0] = 2, 2
+	case "set_decision_0":
+		signing[134], canonical[134] = 0, 0
+	case "append_zero_byte":
+		canonical = append(canonical, 0)
+	default:
+		fail("%s: unknown mutation %s", test.ID, test.Mutation)
+	}
+	actualError := ""
+	if canonical[0] != 1 {
+		actualError = "UNSUPPORTED_VERSION"
+	} else if canonical[134] < 1 || canonical[134] > 4 {
+		actualError = "UNKNOWN_DECISION"
+	} else {
+		sigLen := int(canonical[len(signing)])<<24 | int(canonical[len(signing)+1])<<16 |
+			int(canonical[len(signing)+2])<<8 | int(canonical[len(signing)+3])
+		if len(canonical) != len(signing)+4+sigLen {
+			actualError = "TRAILING_BYTES"
+		} else {
+			publicKey, _ := hex.DecodeString(source.Ed25519PublicKeyHex)
+			if ed25519.Verify(ed25519.PublicKey(publicKey), signing, canonical[len(canonical)-64:]) {
+				actualError = "VALID"
+			} else {
+				actualError = "INVALID_SIGNATURE"
+			}
+		}
+	}
+	if actualError != test.ExpectedError {
+		fail("%s: expected %s, got %s", test.ID, test.ExpectedError, actualError)
+	}
 }
 
 func fail(format string, args ...any) {
@@ -179,9 +233,17 @@ func main() {
 	if len(doc.Vectors) == 0 {
 		fail("vector corpus must not be empty")
 	}
+	if len(doc.NegativeCases) == 0 {
+		fail("negative vector corpus must not be empty")
+	}
 
+	vectorsByID := make(map[string]vector, len(doc.Vectors))
 	for _, v := range doc.Vectors {
 		verifyVector(v)
+		vectorsByID[v.ID] = v
 	}
-	fmt.Printf("ok: %d ProofEnvelopeV1 vector(s) verified\n", len(doc.Vectors))
+	for _, test := range doc.NegativeCases {
+		verifyNegativeCase(test, vectorsByID)
+	}
+	fmt.Printf("ok: %d positive and %d negative ProofEnvelopeV1 vector(s) verified\n", len(doc.Vectors), len(doc.NegativeCases))
 }
