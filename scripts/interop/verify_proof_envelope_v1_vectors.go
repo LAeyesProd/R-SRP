@@ -20,6 +20,10 @@ type vector struct {
 	SignerKeyID                string `json:"signer_key_id"`
 	Ed25519PublicKeyHex        string `json:"ed25519_public_key_hex"`
 	SignatureBytesHex          string `json:"signature_bytes_hex"`
+	PolicyHashHex              string `json:"policy_hash_hex"`
+	BytecodeHashHex            string `json:"bytecode_hash_hex"`
+	InputHashHex               string `json:"input_hash_hex"`
+	StateHashHex               string `json:"state_hash_hex"`
 	SigningBytesLen            int    `json:"signing_bytes_len"`
 	SigningBytesHex            string `json:"signing_bytes_hex"`
 	CanonicalBytesLen          int    `json:"canonical_bytes_len"`
@@ -48,6 +52,24 @@ func verifyVector(v vector) {
 	canonical, err := hex.DecodeString(v.CanonicalBytesHex)
 	if err != nil {
 		fail("%s: invalid canonical hex: %v", v.ID, err)
+	}
+	keyHash := sha256.Sum256([]byte(v.SignerKeyID))
+	metadata := append([]byte{byte(v.SignatureAlgorithmCode)}, keyHash[:]...)
+	reconstructed := []byte{byte(v.ProofEnvelopeVersion), byte(v.EncodingVersion)}
+	for _, value := range []string{
+		v.RuntimeVersionPackedU32Hex, v.PolicyHashHex, v.BytecodeHashHex,
+		v.InputHashHex, v.StateHashHex,
+	} {
+		decoded, decodeErr := hex.DecodeString(value)
+		if decodeErr != nil {
+			fail("%s: invalid semantic field hex: %v", v.ID, decodeErr)
+		}
+		reconstructed = append(reconstructed, decoded...)
+	}
+	reconstructed = append(reconstructed, byte(v.DecisionCode), byte(len(metadata)>>8), byte(len(metadata)))
+	reconstructed = append(reconstructed, metadata...)
+	if hex.EncodeToString(reconstructed) != hex.EncodeToString(signing) {
+		fail("%s: semantic reconstruction mismatch", v.ID)
 	}
 
 	if len(signing) != v.SigningBytesLen {
@@ -103,7 +125,6 @@ func verifyVector(v vector) {
 		if metaLen != 33 || sigLen != 64 {
 			fail("%s: invalid Ed25519 lengths", v.ID)
 		}
-		keyHash := sha256.Sum256([]byte(v.SignerKeyID))
 		if hex.EncodeToString(meta[1:]) != hex.EncodeToString(keyHash[:]) {
 			fail("%s: signer key id hash mismatch", v.ID)
 		}
@@ -116,6 +137,11 @@ func verifyVector(v vector) {
 		}
 		if !ed25519.Verify(ed25519.PublicKey(publicKey), signing, canonical[len(signing)+4:]) {
 			fail("%s: Ed25519 signature verification failed", v.ID)
+		}
+		tampered := append([]byte(nil), signing...)
+		tampered[6] ^= 1
+		if ed25519.Verify(ed25519.PublicKey(publicKey), tampered, canonical[len(signing)+4:]) {
+			fail("%s: tampered payload signature accepted", v.ID)
 		}
 	}
 
