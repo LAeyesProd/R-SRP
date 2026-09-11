@@ -2,30 +2,25 @@
 # Production Hardened Version
 
 # ========== Build Stage ==========
-FROM rust:1.76-alpine@sha256:e594a9705c4514c0e0b5ed2409f7ec34f20af09a33d242524281247b74196c43 AS builder
+FROM rust:1.93.1-bookworm@sha256:7c4ae649a84014c467d79319bbf17ce2632ae8b8be123ac2fb2ea5be46823f31 AS builder
 
 # Install build dependencies
-RUN apk add --no-cache musl-dev openssl-dev
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends cmake pkg-config \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy workspace manifest
+# Copy the complete workspace before resolving dependencies
 COPY Cargo.toml Cargo.lock ./
-RUN mkdir src && echo "fn main(){}" > src/main.rs
-
-# Build dependencies first (for caching)
-RUN cargo fetch
-
-# Copy actual source
-COPY crates/crue-dsl ./crates/crue-dsl
-COPY crates/crypto-core ./crates/crypto-core
-COPY crates/crue-engine ./crates/crue-engine
-COPY crates/immutable-logging ./crates/immutable-logging
+COPY crates ./crates
+COPY rsrp-demo ./rsrp-demo
 COPY services/api-service ./services/api-service
 
+RUN cargo fetch --locked
+
 # Build with optimizations
-WORKDIR /app/services/api-service
-RUN RUSTFLAGS="-C target-cpu=native" cargo build --release --locked
+RUN cargo build --release --locked --package api-service
 
 # ========== Runtime Stage ==========
 # Use distroless for minimal attack surface
@@ -34,20 +29,12 @@ FROM gcr.io/distroless/cc:nonroot@sha256:26474572388bb8bcbf837002e07b3c068e31b05
 WORKDIR /app
 
 # Copy binary (stripped of debug symbols)
-COPY --from=builder /app/services/api-service/target/release/api-service /app/api-service
-
-# Copy config if exists
-COPY --chown=nonroot:nonroot config/ /app/config/
-
-# Set ownership
-RUN chown -R nonroot:nonroot /app
+COPY --from=builder --chown=nonroot:nonroot /app/target/release/api-service /app/api-service
 
 # Expose port
 EXPOSE 8080
 
-# Health check using pure HTTP (no curl)
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD ["wget", "-q", "--spider", "http://localhost:8080/health"]
+# Health probes are configured by the orchestrator; distroless has no HTTP client.
 
 # Run as non-root
 USER nonroot:nonroot
