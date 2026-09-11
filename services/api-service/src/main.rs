@@ -164,6 +164,8 @@ struct AppState {
     trusted_proxies: middleware::TrustedProxyConfig,
 }
 
+const MIN_AUDIT_PUBLICATION_SIGNING_SECRET_BYTES: usize = 32;
+
 #[derive(Debug, Clone, Default)]
 struct EntropyHealthState {
     healthy: bool,
@@ -280,6 +282,47 @@ fn parse_rate_limit_backend() -> Result<RateLimitBackend, std::io::Error> {
             std::io::ErrorKind::InvalidInput,
             format!("Unsupported RATE_LIMIT_BACKEND value: {other}"),
         )),
+    }
+}
+
+fn validate_audit_publication_signing_secret(secret: &str) -> Result<(), std::io::Error> {
+    if secret.as_bytes().len() < MIN_AUDIT_PUBLICATION_SIGNING_SECRET_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "AUDIT_PUBLICATION_SIGNING_SECRET must be at least {MIN_AUDIT_PUBLICATION_SIGNING_SECRET_BYTES} bytes"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_audit_publication_signing_config(
+    provider: Option<&str>,
+    secret: Option<&str>,
+) -> Result<(), std::io::Error> {
+    if let Some(secret) = secret {
+        validate_audit_publication_signing_secret(secret)?;
+    }
+
+    match (provider, secret) {
+        (Some("none"), Some(_)) => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "AUDIT_PUBLICATION_SIGNING_SECRET must be unset when AUDIT_PUBLICATION_SIGNING_PROVIDER=none",
+        )),
+        (Some("softhsm"), Some(_)) => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "AUDIT_PUBLICATION_SIGNING_SECRET must be unset when AUDIT_PUBLICATION_SIGNING_PROVIDER=softhsm",
+        )),
+        (Some("software-ed25519"), None) => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "AUDIT_PUBLICATION_SIGNING_PROVIDER=software-ed25519 requires AUDIT_PUBLICATION_SIGNING_SECRET",
+        )),
+        (None, Some(_)) => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "AUDIT_PUBLICATION_SIGNING_SECRET requires explicit AUDIT_PUBLICATION_SIGNING_PROVIDER=software-ed25519",
+        )),
+        _ => Ok(()),
     }
 }
 
@@ -450,6 +493,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok()
         .filter(|v| !v.trim().is_empty())
         .map(PathBuf::from);
+    validate_audit_publication_signing_config(
+        audit_publication_signing_provider.as_deref(),
+        audit_publication_signing_secret.as_deref(),
+    )?;
     if let Some(dir) = &audit_publications_dir {
         tracing::info!("Audit publication directory configured: {}", dir.display());
     } else {
@@ -517,29 +564,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
             .into())
         }
-        None => {
-            if let Some(secret) = audit_publication_signing_secret.as_deref() {
-                let key_id = audit_publication_signing_key_id
-                    .clone()
-                    .unwrap_or_else(|| "api-service-ed25519".to_string());
-                let key_pair = crypto_core::signature::Ed25519KeyPair::derive_from_secret(
-                    secret.as_bytes(),
-                    Some(key_id.clone()),
-                );
-                let public_key_hex = key_pair
-                    .verifying_key()
-                    .iter()
-                    .map(|b| format!("{:02x}", b))
-                    .collect::<String>();
-                Some(Mutex::new(AuditPublicationSigner::SoftwareEd25519 {
-                    key_pair: Box::new(key_pair),
-                    key_id,
-                    public_key_hex,
-                }))
-            } else {
-                None
-            }
-        }
+        None => None,
     };
 
     if audit_publication_signer.is_some() {
@@ -779,4 +804,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_audit_publication_signing_secret_rejects_short_values() {
+        let err = validate_audit_publication_signing_secret("short")
+            .expect_err("short signing secret must fail");
+        assert!(err.to_string().contains("at least"));
+    }
+
+    #[test]
+    fn test_validate_audit_publication_signing_config_requires_explicit_provider() {
+        let err = validate_audit_publication_signing_config(None, Some(&"a".repeat(32)))
+            .expect_err("implicit software signer must fail");
+        assert!(err.to_string().contains("explicit"));
+    }
+
+    #[test]
+    fn test_validate_audit_publication_signing_config_rejects_secret_with_softhsm() {
+        let err = validate_audit_publication_signing_config(Some("softhsm"), Some(&"a".repeat(32)))
+            .expect_err("softhsm with secret must fail");
+        assert!(err.to_string().contains("must be unset"));
+    }
+
+    #[test]
+    fn test_validate_audit_publication_signing_config_accepts_explicit_software_signer() {
+        validate_audit_publication_signing_config(Some("software-ed25519"), Some(&"a".repeat(32)))
+            .expect("explicit software signer with strong secret allowed");
+    }
 }
