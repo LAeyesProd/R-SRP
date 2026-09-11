@@ -878,7 +878,9 @@ mod tests {
     fn test_validate_audit_publication_signer_runtime_rejects_unset_provider_in_production() {
         let err = validate_audit_publication_signer_runtime(None, false, true)
             .expect_err("missing signer must fail closed in production");
-        assert!(err.to_string().contains("requires an audit publication signer"));
+        assert!(err
+            .to_string()
+            .contains("requires an audit publication signer"));
         assert!(err.to_string().contains("unset"));
     }
 
@@ -886,7 +888,9 @@ mod tests {
     fn test_validate_audit_publication_signer_runtime_rejects_none_provider_in_production() {
         let err = validate_audit_publication_signer_runtime(Some("none"), false, true)
             .expect_err("none provider must fail closed in production");
-        assert!(err.to_string().contains("AUDIT_PUBLICATION_SIGNING_PROVIDER=none"));
+        assert!(err
+            .to_string()
+            .contains("AUDIT_PUBLICATION_SIGNING_PROVIDER=none"));
     }
 
     #[test]
