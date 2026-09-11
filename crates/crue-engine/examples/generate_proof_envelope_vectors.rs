@@ -110,9 +110,9 @@ fn main() -> Result<(), String> {
             canonical_bytes_len: canonical_bytes.len(),
             signature_bytes_hex: crypto_core::hash::hex_encode(&signature_bytes),
             canonical_bytes_hex: crypto_core::hash::hex_encode(&canonical_bytes),
-            canonical_bytes_sha256_hex: crypto_core::hash::hex_encode(
-                &crypto_core::hash::sha256(&canonical_bytes),
-            ),
+            canonical_bytes_sha256_hex: crypto_core::hash::hex_encode(&crypto_core::hash::sha256(
+                &canonical_bytes,
+            )),
         }],
         negative_cases: vec![
             NegativeCase {
@@ -150,8 +150,7 @@ fn main() -> Result<(), String> {
 
     let output = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../docs/PROOF_ENVELOPE_V1_TEST_VECTORS.json");
-    let json =
-        serde_json::to_string_pretty(&document).map_err(|error| error.to_string())? + "\n";
+    let json = serde_json::to_string_pretty(&document).map_err(|error| error.to_string())? + "\n";
     std::fs::write(&output, json).map_err(|error| error.to_string())?;
     println!("wrote {}", output.display());
     Ok(())
