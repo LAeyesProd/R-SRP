@@ -1,0 +1,12 @@
+# Shared by Production Gate and Defense CI.
+[advisories]
+ignore = [
+    # Existing rustls-pemfile exception; see docs/DEPENDENCY_RISK_ASSESSMENT.md (DR-001).
+    "RUSTSEC-2025-0134",
+    # Preserve the existing Production Gate exception for rand.
+    "RUSTSEC-2026-0097",
+]
+
+[output]
+deny = ["warnings"]
+quiet = false
