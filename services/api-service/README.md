@@ -17,6 +17,7 @@ cargo run -p api-service
 - `AUDIT_PUBLICATION_SIGNING_PROVIDER=software-ed25519` now requires an explicit `AUDIT_PUBLICATION_SIGNING_SECRET` of at least 32 bytes.
 - `AUDIT_PUBLICATION_SIGNING_SECRET` is rejected unless the provider is explicitly set to `software-ed25519`.
 - `AUDIT_PUBLICATION_SIGNING_PROVIDER=softhsm` and `AUDIT_PUBLICATION_SIGNING_PROVIDER=none` require `AUDIT_PUBLICATION_SIGNING_SECRET` to be unset.
+- Production profiles fail closed unless an audit publication signer is configured; because this open-source TOE build does not ship a production-capable HSM backend, `AUDIT_PUBLICATION_SIGNING_PROVIDER=none` or an unset provider now abort startup in production.
 
 ## Roadmap
 
