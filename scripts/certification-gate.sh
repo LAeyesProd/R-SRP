@@ -55,11 +55,15 @@ SIGNOFF_STATUS="$(jq -r '.status // empty' "$SIGNOFF_JSON")"
 SIGNOFF_COMMIT="$(jq -r '.commit_sha // empty' "$SIGNOFF_JSON")"
 SIGNOFF_DIGEST="$(jq -r '.artifact_sha256 // empty' "$SIGNOFF_JSON")"
 SIGNOFF_OWNER="$(jq -r '.approved_by // empty' "$SIGNOFF_JSON")"
+SIGNOFF_ENVIRONMENT="$(jq -r '.approval_environment // empty' "$SIGNOFF_JSON")"
+SIGNOFF_ENFORCED="$(jq -r '.approval_enforced // false' "$SIGNOFF_JSON")"
 
 [ "$SIGNOFF_STATUS" = "APPROVED" ] || { echo "security owner sign-off is not approved" >&2; exit 1; }
 [ "$SIGNOFF_COMMIT" = "$EXPECTED_COMMIT" ] || { echo "sign-off commit mismatch" >&2; exit 1; }
 [ "$SIGNOFF_DIGEST" = "$TOE_DIGEST" ] || { echo "sign-off artifact digest mismatch" >&2; exit 1; }
 [ -n "$SIGNOFF_OWNER" ] || { echo "missing sign-off owner" >&2; exit 1; }
+[ "$SIGNOFF_ENVIRONMENT" = "security-owner-signoff" ] || { echo "unexpected sign-off environment" >&2; exit 1; }
+[ "$SIGNOFF_ENFORCED" = "true" ] || { echo "sign-off approval is not enforced" >&2; exit 1; }
 
 cosign verify-blob \
   --certificate "$SIGNOFF_CERT" \

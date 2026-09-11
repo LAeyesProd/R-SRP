@@ -99,6 +99,7 @@ Required outputs:
 - SBOM bundle (CycloneDX + SPDX), checksum, and verified signature.
 - in-toto/SLSA provenance attestation bound to the TOE digest.
 - `SECURITY_OWNER_SIGNOFF.json` and verified signature.
+- protected `security-owner-signoff` environment approval evidence.
 - signed release artifact metadata.
 - reproducible build comparison result for two independent runners.
 
@@ -110,6 +111,7 @@ Bundle integrity constraints:
 - bundle metadata must be signed (cosign or equivalent approved signer).
 - provenance subject digest must match the exact TOE release artifact digest.
 - security owner sign-off must reference the same commit and TOE digest as provenance.
+- security owner sign-off must be generated only after protected environment approval.
 
 Mismatch in any digest or signature is a release blocker.
 

@@ -10,6 +10,8 @@ on:
 env:
   CARGO_TERM_COLOR: always
   COSIGN_EXPERIMENTAL: "1"
+  RUST_TOOLCHAIN_VERSION: "1.90.0"
+  TOE_BINARY: rsrp-demo
 
 jobs:
   provenance:
@@ -29,14 +31,43 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y jq
 
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN_VERSION }}
+
+      - name: Install OQS build dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake \
+            clang-14 \
+            llvm-14-dev \
+            libclang-14-dev \
+            pkg-config
+          echo "LIBCLANG_PATH=/usr/lib/llvm-14/lib" >> "$GITHUB_ENV"
+
+      - name: Prefetch dependencies
+        run: cargo fetch --locked
+
+      - name: Set deterministic build epoch
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)" >> "$GITHUB_ENV"
+
+      - name: Build TOE release artifact
+        run: |
+          set -euo pipefail
+          cargo build --release --locked --manifest-path rsrp-demo/Cargo.toml --features production
+
       - name: Install Cosign
         uses: sigstore/cosign-installer@v3.10.1
 
-      - name: Download TOE evidence
-        uses: actions/download-artifact@v4
-        with:
-          name: toe-build-${{ github.sha }}
-          path: certification/evidence/toe
+      - name: Record TOE evidence
+        run: |
+          set -euo pipefail
+          mkdir -p certification/evidence/toe
+          cp target/release/${TOE_BINARY} certification/evidence/toe/${TOE_BINARY}
+          sha256sum certification/evidence/toe/${TOE_BINARY} > certification/evidence/toe/${TOE_BINARY}.sha256
 
       - name: Generate provenance statement
         run: |
