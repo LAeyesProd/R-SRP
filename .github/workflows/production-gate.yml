@@ -177,9 +177,7 @@ jobs:
       - name: Enforce cargo-audit policy
         run: |
           set -euo pipefail
-          cargo audit --deny warnings \
-            --ignore RUSTSEC-2025-0134 \
-            --ignore RUSTSEC-2026-0097
+          cargo audit --config .cargo/audit.toml
 
       - name: Reject non-crates.io dependency sources
         run: |
