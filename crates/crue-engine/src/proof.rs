@@ -315,7 +315,10 @@ impl ProofEnvelopeV1 {
     /// schema/encoding revision or an unknown decision code.
     pub fn validate_structure(&self) -> Result<(), String> {
         if self.version != PROOF_ENVELOPE_V1_VERSION {
-            return Err(format!("unsupported ProofEnvelopeV1 version {}", self.version));
+            return Err(format!(
+                "unsupported ProofEnvelopeV1 version {}",
+                self.version
+            ));
         }
         if self.encoding_version != PROOF_ENVELOPE_V1_ENCODING_VERSION {
             return Err(format!(
@@ -1224,8 +1227,7 @@ THEN
             Some("negative-test-key".into()),
         );
         let pk = kp.verifying_key();
-        let envelope =
-            ProofEnvelopeV1::sign_ed25519(&binding, "negative-test-key", &kp).unwrap();
+        let envelope = ProofEnvelopeV1::sign_ed25519(&binding, "negative-test-key", &kp).unwrap();
 
         let mutations: [fn(&mut ProofEnvelopeV1); 3] = [
             |candidate: &mut ProofEnvelopeV1| candidate.version = 2,
@@ -1257,8 +1259,7 @@ THEN
             Some("context-test-key".into()),
         );
         let pk = kp.verifying_key();
-        let envelope =
-            ProofEnvelopeV1::sign_ed25519(&binding, "context-test-key", &kp).unwrap();
+        let envelope = ProofEnvelopeV1::sign_ed25519(&binding, "context-test-key", &kp).unwrap();
 
         assert!(envelope
             .verify_ed25519_with_binding(&binding, "context-test-key", &pk)
