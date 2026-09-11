@@ -29,6 +29,14 @@ type VectorDoc = {
   schema: string;
   version: number;
   vectors: Vector[];
+  negative_cases: NegativeCase[];
+};
+
+type NegativeCase = {
+  id: string;
+  source_vector: string;
+  mutation: string;
+  expected_error: string;
 };
 
 function hexToBuf(hex: string): Buffer {
@@ -99,6 +107,34 @@ function verifyVector(v: Vector): void {
   if (digest !== v.canonical_bytes_sha256_hex) throw new Error(`${v.id}: sha256 mismatch`);
 }
 
+function verifyNegativeCase(test: NegativeCase, vectors: Map<string, Vector>): void {
+  const source = vectors.get(test.source_vector);
+  if (!source) throw new Error(`${test.id}: source vector not found`);
+  const signing = Buffer.from(source.signing_bytes_hex, "hex");
+  const canonical = Buffer.from(source.canonical_bytes_hex, "hex");
+  let mutatedCanonical = canonical;
+  switch (test.mutation) {
+    case "flip_signing_byte_6": signing[6] ^= 1; canonical[6] ^= 1; break;
+    case "flip_last_signature_byte": canonical[canonical.length - 1] ^= 1; break;
+    case "set_version_2": signing[0] = canonical[0] = 2; break;
+    case "set_decision_0": signing[134] = canonical[134] = 0; break;
+    case "append_zero_byte": mutatedCanonical = Buffer.concat([canonical, Buffer.from([0])]); break;
+    default: throw new Error(`${test.id}: unknown mutation ${test.mutation}`);
+  }
+  let actualError: string;
+  if (mutatedCanonical[0] !== 1) actualError = "UNSUPPORTED_VERSION";
+  else if (![1, 2, 3, 4].includes(mutatedCanonical[134])) actualError = "UNKNOWN_DECISION";
+  else if (mutatedCanonical.length !== signing.length + 4 + mutatedCanonical.readUInt32BE(signing.length)) actualError = "TRAILING_BYTES";
+  else {
+    const key = crypto.createPublicKey({
+      key: Buffer.concat([Buffer.from("302a300506032b6570032100", "hex"), hexToBuf(source.ed25519_public_key_hex)]),
+      format: "der", type: "spki",
+    });
+    actualError = crypto.verify(null, signing, key, mutatedCanonical.subarray(-64)) ? "VALID" : "INVALID_SIGNATURE";
+  }
+  if (actualError !== test.expected_error) throw new Error(`${test.id}: expected ${test.expected_error}, got ${actualError}`);
+}
+
 function main(): void {
   const here = path.dirname(fileURLToPath(import.meta.url));
   const repoRoot = path.resolve(here, "..", "..");
@@ -108,9 +144,12 @@ function main(): void {
   if (data.schema !== "rsrp.proof-envelope-v1.test-vectors") throw new Error("schema mismatch");
   if (data.version !== 1) throw new Error("version mismatch");
   if (!data.vectors?.length) throw new Error("vector corpus must not be empty");
+  if (!data.negative_cases?.length) throw new Error("negative vector corpus must not be empty");
 
   for (const v of data.vectors ?? []) verifyVector(v);
-  console.log(`ok: ${data.vectors.length} ProofEnvelopeV1 vector(s) verified`);
+  const vectors = new Map(data.vectors.map((vector) => [vector.id, vector]));
+  for (const test of data.negative_cases) verifyNegativeCase(test, vectors);
+  console.log(`ok: ${data.vectors.length} positive and ${data.negative_cases.length} negative ProofEnvelopeV1 vector(s) verified`);
 }
 
 main();
