@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -12,6 +13,13 @@ import (
 
 type vector struct {
 	ID                         string `json:"id"`
+	Kind                       string `json:"kind"`
+	ProofEnvelopeVersion       int    `json:"proof_envelope_version"`
+	EncodingVersion            int    `json:"encoding_version"`
+	SignatureAlgorithmCode     int    `json:"signature_algorithm_code"`
+	SignerKeyID                string `json:"signer_key_id"`
+	Ed25519PublicKeyHex        string `json:"ed25519_public_key_hex"`
+	SignatureBytesHex          string `json:"signature_bytes_hex"`
 	SigningBytesLen            int    `json:"signing_bytes_len"`
 	SigningBytesHex            string `json:"signing_bytes_hex"`
 	CanonicalBytesLen          int    `json:"canonical_bytes_len"`
@@ -48,6 +56,9 @@ func verifyVector(v vector) {
 	if len(canonical) != v.CanonicalBytesLen {
 		fail("%s: canonical len mismatch", v.ID)
 	}
+	if len(signing) < 138 {
+		fail("%s: signing bytes too short", v.ID)
+	}
 	if len(canonical) < len(signing)+4 {
 		fail("%s: canonical too short", v.ID)
 	}
@@ -70,6 +81,42 @@ func verifyVector(v vector) {
 	}
 	if int(signing[134]) != v.DecisionCode {
 		fail("%s: decision code mismatch", v.ID)
+	}
+	if signing[0] != 1 || int(signing[0]) != v.ProofEnvelopeVersion {
+		fail("%s: envelope version mismatch", v.ID)
+	}
+	if signing[1] != 1 || int(signing[1]) != v.EncodingVersion {
+		fail("%s: encoding version mismatch", v.ID)
+	}
+	if v.DecisionCode < 1 || v.DecisionCode > 4 {
+		fail("%s: unknown decision code", v.ID)
+	}
+	metaLen := int(signing[135])<<8 | int(signing[136])
+	meta := signing[137:]
+	if len(meta) != metaLen || len(meta) == 0 {
+		fail("%s: signature metadata length mismatch", v.ID)
+	}
+	if int(meta[0]) != v.SignatureAlgorithmCode {
+		fail("%s: algorithm code mismatch", v.ID)
+	}
+	if v.Kind == "ed25519" {
+		if metaLen != 33 || sigLen != 64 {
+			fail("%s: invalid Ed25519 lengths", v.ID)
+		}
+		keyHash := sha256.Sum256([]byte(v.SignerKeyID))
+		if hex.EncodeToString(meta[1:]) != hex.EncodeToString(keyHash[:]) {
+			fail("%s: signer key id hash mismatch", v.ID)
+		}
+		if hex.EncodeToString(canonical[len(signing)+4:]) != v.SignatureBytesHex {
+			fail("%s: signature bytes mismatch", v.ID)
+		}
+		publicKey, err := hex.DecodeString(v.Ed25519PublicKeyHex)
+		if err != nil || len(publicKey) != ed25519.PublicKeySize {
+			fail("%s: invalid Ed25519 public key", v.ID)
+		}
+		if !ed25519.Verify(ed25519.PublicKey(publicKey), signing, canonical[len(signing)+4:]) {
+			fail("%s: Ed25519 signature verification failed", v.ID)
+		}
 	}
 
 	digest := sha256.Sum256(canonical)
@@ -102,6 +149,9 @@ func main() {
 	}
 	if doc.Version != 1 {
 		fail("version mismatch")
+	}
+	if len(doc.Vectors) == 0 {
+		fail("vector corpus must not be empty")
 	}
 
 	for _, v := range doc.Vectors {
