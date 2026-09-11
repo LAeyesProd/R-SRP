@@ -7,6 +7,10 @@ db-urls = ["https://github.com/rustsec/advisory-db"]
 ignore = [
     # rustls stack currently pulls rustls-pemfile transitively; temporary accepted risk (DR-001).
     { id = "RUSTSEC-2025-0134", reason = "temporary accepted risk; see docs/DEPENDENCY_RISK_ASSESSMENT.md (DR-001) and docs/CERTIFICATION_BUNDLE.md ; tracked: https://github.com/LAeyesProd/R-SRP/issues/184 ; review-date: 2026-03-31" },
+    # No fixed releases are available for these unsoundness advisories; cargo-audit remains
+    # configured to ignore them until upstream publishes patched versions (DR-002).
+    { id = "RUSTSEC-2026-0190", reason = "no fixed upstream release; temporary accepted risk documented in docs/DEPENDENCY_RISK_ASSESSMENT.md (DR-002)" },
+    { id = "RUSTSEC-2026-0097", reason = "no fixed upstream release; temporary accepted risk documented in docs/DEPENDENCY_RISK_ASSESSMENT.md (DR-002)" },
 ]
 
 [licenses]

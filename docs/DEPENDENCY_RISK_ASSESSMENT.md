@@ -46,6 +46,15 @@ This note documents the remaining dependency risk that is currently accepted wit
 2. Re-run `cargo tree -i rustls-pemfile -e normal` at each release candidate.
 3. Remove risk acceptance once transitive dependency is eliminated.
 
+### DR-002: `anyhow` and `rand` unsoundness advisories
+- Advisories: `RUSTSEC-2026-0190`, `RUSTSEC-2026-0097`
+- Packages: `anyhow 1.0.102`, `rand 0.8.5`, and `rand 0.9.2` (transitive)
+- Current status:
+  - no fixed upstream releases are published for these advisories
+  - `cargo-audit` ignores are limited to these advisories and the existing DR-001 exception
+  - the affected APIs are not used for custom logger downcasting in this workspace
+- Decision: temporary risk acceptance with monitoring; remove the exceptions when patched releases become available.
+
 ## 7. Verification Commands
 ```bash
 cargo audit --json
