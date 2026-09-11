@@ -261,10 +261,16 @@ fn is_production_environment() -> bool {
         std::env::var("ENV").ok(),
         std::env::var("APP_ENV").ok(),
         std::env::var("RUST_ENV").ok(),
+        std::env::var("RSRP_DEPLOYMENT_PROFILE").ok(),
     ]
     .into_iter()
     .flatten()
-    .any(|v| matches!(v.to_ascii_lowercase().as_str(), "prod" | "production"))
+    .any(|v| {
+        matches!(
+            v.to_ascii_lowercase().as_str(),
+            "prod" | "production" | "hardened"
+        )
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -324,6 +330,23 @@ fn validate_audit_publication_signing_config(
         )),
         _ => Ok(()),
     }
+}
+
+fn validate_audit_publication_signer_runtime(
+    provider: Option<&str>,
+    signer_present: bool,
+    production_env: bool,
+) -> Result<(), std::io::Error> {
+    if production_env && !signer_present {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "Production requires an audit publication signer; AUDIT_PUBLICATION_SIGNING_PROVIDER={} is not allowed because this open-source TOE build exposes no production-capable HSM backend",
+                provider.unwrap_or("unset")
+            ),
+        ));
+    }
+    Ok(())
 }
 
 fn cors_layer_from_env() -> Result<CorsLayer, Box<dyn std::error::Error>> {
@@ -567,6 +590,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None => None,
     };
 
+    validate_audit_publication_signer_runtime(
+        audit_publication_signing_provider.as_deref(),
+        audit_publication_signer.is_some(),
+        production_env,
+    )?;
+
     if audit_publication_signer.is_some() {
         let provider_name = audit_publication_signer
             .as_ref()
@@ -598,13 +627,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if production_env {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "software-ed25519 signer is forbidden in production. Use AUDIT_PUBLICATION_SIGNING_PROVIDER=softhsm",
+                "software-ed25519 signer is forbidden in production. Production requires an approved HSM-backed signer, and this open-source TOE build does not implement one",
             )
             .into());
         }
         if !cfg!(debug_assertions) {
             tracing::warn!(
-                "Audit publication signer uses software-ed25519. Prefer softhsm/HSM for non-development environments."
+                "Audit publication signer uses software-ed25519. Prefer an approved HSM-backed signer outside development."
             );
         }
     }
@@ -835,5 +864,26 @@ mod tests {
     fn test_validate_audit_publication_signing_config_accepts_explicit_software_signer() {
         validate_audit_publication_signing_config(Some("software-ed25519"), Some(&"a".repeat(32)))
             .expect("explicit software signer with strong secret allowed");
+    }
+
+    #[test]
+    fn test_validate_audit_publication_signer_runtime_rejects_unset_provider_in_production() {
+        let err = validate_audit_publication_signer_runtime(None, false, true)
+            .expect_err("missing signer must fail closed in production");
+        assert!(err.to_string().contains("requires an audit publication signer"));
+        assert!(err.to_string().contains("unset"));
+    }
+
+    #[test]
+    fn test_validate_audit_publication_signer_runtime_rejects_none_provider_in_production() {
+        let err = validate_audit_publication_signer_runtime(Some("none"), false, true)
+            .expect_err("none provider must fail closed in production");
+        assert!(err.to_string().contains("AUDIT_PUBLICATION_SIGNING_PROVIDER=none"));
+    }
+
+    #[test]
+    fn test_validate_audit_publication_signer_runtime_allows_missing_signer_outside_production() {
+        validate_audit_publication_signer_runtime(None, false, false)
+            .expect("non-production may run unsigned");
     }
 }
