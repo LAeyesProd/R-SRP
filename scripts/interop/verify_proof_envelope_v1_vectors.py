@@ -2,6 +2,7 @@ import hashlib
 import json
 from pathlib import Path
 
+from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 
@@ -12,6 +13,23 @@ def hex_to_bytes(s: str) -> bytes:
 def verify_vector(v: dict) -> None:
     signing = hex_to_bytes(v["signing_bytes_hex"])
     canonical = hex_to_bytes(v["canonical_bytes_hex"])
+
+    key_hash = hashlib.sha256(v["signer_key_id"].encode("utf-8")).digest()
+    metadata = bytes([v["signature_algorithm_code"]]) + key_hash
+    reconstructed = b"".join(
+        [
+            bytes([v["proof_envelope_version"], v["encoding_version"]]),
+            hex_to_bytes(v["runtime_version_packed_u32_be_hex"]),
+            hex_to_bytes(v["policy_hash_hex"]),
+            hex_to_bytes(v["bytecode_hash_hex"]),
+            hex_to_bytes(v["input_hash_hex"]),
+            hex_to_bytes(v["state_hash_hex"]),
+            bytes([v["decision_code"]]),
+            len(metadata).to_bytes(2, "big"),
+            metadata,
+        ]
+    )
+    assert reconstructed == signing, f"{v['id']}: semantic reconstruction mismatch"
 
     assert len(signing) == v["signing_bytes_len"], f"{v['id']}: signing len mismatch"
     assert len(canonical) == v["canonical_bytes_len"], f"{v['id']}: canonical len mismatch"
@@ -38,12 +56,19 @@ def verify_vector(v: dict) -> None:
     assert meta[0] == v["signature_algorithm_code"], f"{v['id']}: algorithm code mismatch"
     if v["kind"] == "ed25519":
         assert meta_len == 33, f"{v['id']}: invalid Ed25519 metadata length"
-        expected_key_hash = hashlib.sha256(v["signer_key_id"].encode("utf-8")).digest()
-        assert meta[1:] == expected_key_hash, f"{v['id']}: signer key id hash mismatch"
+        assert meta[1:] == key_hash, f"{v['id']}: signer key id hash mismatch"
         assert sig_len == 64, f"{v['id']}: invalid Ed25519 signature length"
         assert sig.hex() == v["signature_bytes_hex"], f"{v['id']}: signature bytes mismatch"
         public_key = Ed25519PublicKey.from_public_bytes(hex_to_bytes(v["ed25519_public_key_hex"]))
         public_key.verify(sig, signing)
+        tampered = bytearray(signing)
+        tampered[6] ^= 1
+        try:
+            public_key.verify(sig, tampered)
+        except InvalidSignature:
+            pass
+        else:
+            raise AssertionError(f"{v['id']}: tampered payload signature accepted")
 
     digest = hashlib.sha256(canonical).hexdigest()
     assert digest == v["canonical_bytes_sha256_hex"], f"{v['id']}: sha256 mismatch"
