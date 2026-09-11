@@ -478,7 +478,7 @@ impl TsaTimestamp {
         use base64::{engine::general_purpose::STANDARD, Engine as _};
         use openssl::pkcs7::{Pkcs7, Pkcs7Flags};
         use openssl::stack::Stack;
-        use openssl::x509::{store::X509StoreBuilder, X509};
+        use openssl::x509::{store::X509StoreBuilder, X509PurposeId, X509};
 
         if self.token.is_empty() {
             return Err(TsaCmsVerifyError::TokenMissing);
@@ -496,6 +496,10 @@ impl TsaTimestamp {
             .map_err(|e| TsaCmsVerifyError::TrustStore(e.to_string()))?;
         let mut store_builder =
             X509StoreBuilder::new().map_err(|e| TsaCmsVerifyError::TrustStore(e.to_string()))?;
+        // PKCS7 verification otherwise defaults to S/MIME signing, rejecting TSA certificates.
+        store_builder
+            .set_purpose(X509PurposeId::TIMESTAMP_SIGN)
+            .map_err(|e| TsaCmsVerifyError::TrustStore(e.to_string()))?;
         for cert in certs {
             store_builder
                 .add_cert(cert)
@@ -966,6 +970,7 @@ mod tests {
         assert!(tsa.token.starts_with("mock-sha256="));
     }
 
+    #[cfg(not(feature = "tsa-http-client"))]
     #[test]
     fn test_add_tsa_timestamp_rejects_non_mock() {
         let mut service = PublicationService::new();

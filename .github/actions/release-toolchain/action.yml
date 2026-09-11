@@ -1,0 +1,19 @@
+name: Release toolchain
+description: Install the pinned Rust and native crypto build prerequisites
+inputs:
+  toolchain:
+    description: Rust toolchain
+    default: '1.93.1'
+runs:
+  using: composite
+  steps:
+    - uses: dtolnay/rust-toolchain@1.93.1
+      with:
+        toolchain: ${{ inputs.toolchain }}
+        components: rustfmt, clippy
+    - shell: bash
+      run: |
+        set -euo pipefail
+        sudo apt-get update
+        sudo apt-get install -y cmake clang libclang-dev pkg-config libssl-dev openssl jq
+        cargo fetch --locked

@@ -1,6 +1,7 @@
 //! HSM (Hardware Security Module) integration
 //!
-//! Provides abstraction layer for Thales Luna HSM and other PKCS#11 compatible HSMs
+//! The only implemented backend is an in-memory Ed25519 software simulation.
+//! No application PKCS#11 or physical HSM backend is implemented here.
 
 use crate::{CryptoError, KeyMetadata, Result};
 use ed25519_dalek::{Signature as Ed25519Signature, Verifier as _, VerifyingKey};
@@ -68,7 +69,7 @@ pub trait HsmSession: Send + HsmSignerOps + HsmVerifierOps {
     fn close(&mut self);
 }
 
-/// SoftHSM implementation for testing
+/// In-memory software simulation for testing, not the SoftHSM2 PKCS#11 module.
 pub struct SoftHsm {
     config: HsmConfig,
     keys: std::collections::HashMap<String, Vec<u8>>,
@@ -287,7 +288,7 @@ mod tests {
         };
 
         let mut session = create_hsm_session(&config).unwrap();
-        let handle = session.generate_key_pair("RSA", "test-key").unwrap();
+        let handle = session.generate_key_pair("ED25519", "test-key").unwrap();
 
         let data = b"test data";
         let signature = session.sign(&handle, data).unwrap();

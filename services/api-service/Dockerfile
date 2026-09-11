@@ -11,6 +11,9 @@ RUN apt-get update \
 
 WORKDIR /app
 
+ARG SOURCE_DATE_EPOCH
+ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
+
 # Copy the complete workspace before resolving dependencies
 COPY Cargo.toml Cargo.lock ./
 COPY .cargo/config.toml .cargo/config.toml

@@ -1,0 +1,58 @@
+name: Release evidence
+description: Generate an API CycloneDX SBOM and provenance bound to the extracted release binary
+inputs:
+  directory:
+    description: Directory containing api-service extracted from the final image
+    required: true
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        EVIDENCE: ${{ inputs.directory }}
+        REPOSITORY: ${{ github.repository }}
+        COMMIT: ${{ github.sha }}
+        WORKFLOW_REF: ${{ github.workflow_ref }}
+        RUN_ID: ${{ github.run_id }}
+      run: |
+        set -euo pipefail
+        cargo install cargo-cyclonedx --version 0.5.9 --locked
+        cargo cyclonedx --manifest-path services/api-service/Cargo.toml \
+          --all --format json --spec-version 1.5 --override-filename release
+        git diff --exit-code -- Cargo.lock
+        cp services/api-service/release.json "$EVIDENCE/sbom.cdx.json"
+        jq -e '.bomFormat == "CycloneDX" and (.components | length > 0)' "$EVIDENCE/sbom.cdx.json"
+        # Only volatile document identity/time are excluded, not component versions or hashes.
+        jq -S 'del(.serialNumber, .metadata.timestamp)' "$EVIDENCE/sbom.cdx.json" > "$EVIDENCE/sbom.canonical.json"
+        jq -n \
+          --arg binary_sha "$(sha256sum "$EVIDENCE/api-service" | cut -d ' ' -f1)" \
+          --arg sbom_sha "$(sha256sum "$EVIDENCE/sbom.canonical.json" | cut -d ' ' -f1)" \
+          --arg lock_sha "$(sha256sum Cargo.lock | cut -d ' ' -f1)" \
+          --arg dockerfile_sha "$(sha256sum services/api-service/Dockerfile | cut -d ' ' -f1)" \
+          --arg commit "$COMMIT" --arg repo "$REPOSITORY" \
+          --arg workflow "$WORKFLOW_REF" --arg run "$RUN_ID" \
+          --arg epoch "$(git log -1 --pretty=%ct)" \
+          '{
+            "_type": "https://in-toto.io/Statement/v1",
+            subject: [
+              {name: "api-service", digest: {sha256: $binary_sha}},
+              {name: "sbom.canonical.json", digest: {sha256: $sbom_sha}}
+            ],
+            predicateType: "https://slsa.dev/provenance/v1",
+            predicate: {
+              buildDefinition: {
+                buildType: ("https://github.com/" + $repo + "/docker-build/v1"),
+                externalParameters: {commit: $commit, sourceDateEpoch: $epoch},
+                internalParameters: {},
+                resolvedDependencies: [
+                  {uri: ("git+https://github.com/" + $repo), digest: {gitCommit: $commit}},
+                  {uri: "file:Cargo.lock", digest: {sha256: $lock_sha}},
+                  {uri: "file:services/api-service/Dockerfile", digest: {sha256: $dockerfile_sha}}
+                ]
+              },
+              runDetails: {
+                builder: {id: ("https://github.com/" + $workflow)},
+                metadata: {invocationId: ("https://github.com/" + $repo + "/actions/runs/" + $run)}
+              }
+            }
+          }' > "$EVIDENCE/provenance.json"

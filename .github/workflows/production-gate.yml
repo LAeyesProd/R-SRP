@@ -7,6 +7,13 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
@@ -15,123 +22,196 @@ env:
   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
 
 jobs:
-  production-profile:
-    name: Enforce Production Crypto Profile
+  feature-matrix:
+    name: Compatible feature matrix (all-features is intentionally forbidden)
     runs-on: ubuntu-22.04
-    permissions:
-      contents: read
-
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@1.93.1
-        with:
-          components: clippy
-
-      - name: Install OQS toolchain (bindgen/cmake)
+      - id: matrix
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y \
-            cmake \
-            clang-14 \
-            llvm-14-dev \
-            libclang-14-dev \
-            pkg-config
-          test -f /usr/lib/llvm-14/lib/libclang.so
-          echo "LIBCLANG_PATH=/usr/lib/llvm-14/lib" >> "$GITHUB_ENV"
+          common="rsrp-policy-dsl/strict rsrp-security-core/hsm rsrp-security-core/fips rsrp-proof-engine/deterministic rsrp-immutable-ledger/tsa-http-client rsrp-immutable-ledger/tsa-cms-openssl api-service/tsa-cms-openssl"
+          variants="rsrp-pqcrypto/dilithium2 rsrp-pqcrypto/dilithium3 rsrp-pqcrypto/dilithium5 rsrp-pqcrypto/kyber512 rsrp-pqcrypto/kyber768 rsrp-pqcrypto/kyber1024 rsrp-pqcrypto/falcon512 rsrp-pqcrypto/falcon1024 rsrp-pqcrypto/use-pure-rust"
+          matrix="$(jq -cn --arg common "$common" --arg variants "$variants" '{include: [
+            {name: "default", features: ""},
+            {name: "mock", features: ($common + " " + $variants + " rsrp-demo/mock-crypto")},
+            {name: "real", features: ($common + " " + $variants + " rsrp-demo/real-crypto")},
+            {name: "production", features: ($common + " rsrp-demo/production")}
+          ]}')"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
-      - name: Isolate cargo directories for deterministic build
+  production-profile:
+    name: Build clean / fmt / Clippy (${{ matrix.name }})
+    needs: feature-matrix
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.feature-matrix.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/release-toolchain
+      - name: Format entire workspace
+        run: cargo fmt --all -- --check
+      - name: Check and lint every workspace target
+        env:
+          FEATURES: ${{ matrix.features }}
         run: |
           set -euo pipefail
-          echo "CARGO_HOME=${RUNNER_TEMP}/cargo-home" >> "$GITHUB_ENV"
-          echo "CARGO_TARGET_DIR=${RUNNER_TEMP}/cargo-target" >> "$GITHUB_ENV"
-          mkdir -p "${RUNNER_TEMP}/cargo-home" "${RUNNER_TEMP}/cargo-target"
-
-      - name: Normalize rust environment
-        run: |
-          set -euo pipefail
-          unset RUSTFLAGS || true
-          unset CARGO_ENCODED_RUSTFLAGS || true
-          unset CARGO_BUILD_TARGET || true
-          unset RUSTC_WRAPPER || true
-          unset RUSTC_WORKSPACE_WRAPPER || true
-          rustup show
-          cargo --version
-
-      - name: Ensure clippy component is installed
-        run: |
-          set -euo pipefail
-          toolchain="$(rustup show active-toolchain | awk '{print $1}')"
-          rustup component add clippy --toolchain "$toolchain"
-          cargo clippy --version
-
-      - name: Lockfile sync check
-        run: cargo fetch --locked
-
-      - name: Sanitize cargo build state
-        run: |
-          set -euo pipefail
+          args=()
+          if [ -n "$FEATURES" ]; then args=(--features "$FEATURES"); fi
           cargo clean
-          cargo fetch --locked
-
-      - name: Enforce zero-warning policy (clippy)
-        run: |
-          set -euo pipefail
-          cargo check --all-targets --locked \
-            -p rsrp-policy-dsl \
-            -p rsrp-security-core \
-            -p rsrp-proof-engine \
-            -p rsrp-pqcrypto
-          cargo clippy --all-targets --locked --no-deps \
-            -p rsrp-policy-dsl \
-            -p rsrp-security-core \
-            -p rsrp-proof-engine \
-            -p rsrp-pqcrypto \
-            -- -D warnings
-
-      - name: Enforce entropy self-test coverage
-        run: |
-          set -euo pipefail
-          cargo test -p rsrp-security-core --locked entropy::tests::test_entropy_health_check_reports_ok -- --nocapture
-
-      - name: Ensure no mock backend in production feature graph
+          cargo clippy --workspace --all-targets --locked "${args[@]}" -- -D warnings
+          cargo check --workspace --all-targets --locked "${args[@]}"
+          git diff --exit-code -- Cargo.lock
+      - name: Reject mock backend in production graph
+        if: matrix.name == 'production'
         run: |
           set -euo pipefail
           cargo tree --manifest-path rsrp-demo/Cargo.toml -e features --features production --locked > feature-tree.txt
-          if grep -E "mock-crypto" feature-tree.txt; then
-            echo "mock-crypto detected in production graph"
+          if grep -q 'mock-crypto' feature-tree.txt; then
+            echo "mock-crypto detected in production graph" >&2
             exit 1
           fi
-
-      - name: Build rsrp-pqcrypto in production mode
+      - name: Retain incompatible-feature compile guards
+        if: matrix.name == 'production'
         run: |
           set -euo pipefail
-          cargo build \
-            -p rsrp-pqcrypto \
-            --release \
-            --locked \
-            -j 1 \
-            --no-default-features \
-            --features production
+          if cargo check -p rsrp-pqcrypto --all-features --locked > incompatible-features.log 2>&1; then
+            echo "incompatible crypto features unexpectedly accepted" >&2
+            exit 1
+          fi
+          grep -F 'Enable exactly one of' incompatible-features.log
 
-      - name: Compile rsrp-pqcrypto tests in production mode
+  workspace-tests:
+    name: Workspace tests (${{ matrix.name }})
+    needs: [feature-matrix, production-profile]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.feature-matrix.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/release-toolchain
+      - name: Execute unit, integration and documentation tests
+        env:
+          FEATURES: ${{ matrix.features }}
         run: |
           set -euo pipefail
-          cargo test \
-            -p rsrp-pqcrypto \
-            --locked \
-            -j 1 \
-            --no-default-features \
-            --features production \
-            --tests \
-            --no-run
+          args=()
+          if [ -n "$FEATURES" ]; then args=(--features "$FEATURES"); fi
+          cargo test --workspace --locked "${args[@]}" -- --test-threads=1
+
+  real-crypto:
+    name: Real OpenSSL/TSA and OQS crypto
+    needs: workspace-tests
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/release-toolchain
+      - name: Execute production crypto tests (not just compile)
+        run: |
+          set -euo pipefail
+          cargo test -p rsrp-pqcrypto --locked --no-default-features --features production -- --test-threads=1
+          cargo test -p rsrp-proof-engine -p rsrp-pqcrypto --locked \
+            --features rsrp-proof-engine/pq-proof,rsrp-pqcrypto/production -- --test-threads=1
+          cargo test -p rsrp-immutable-ledger --locked --features tsa-http-client,tsa-cms-openssl -- --test-threads=1
+          cargo test -p rsrp-security-core --locked --features hsm -- --test-threads=1
+          cargo run --release --locked -p rsrp-demo --features production
+
+  pkcs11:
+    name: External SoftHSM2 PKCS11 module (not an API HSM backend)
+    needs: workspace-tests
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install SoftHSM2 and OpenSC
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y softhsm2 opensc openssl
+      - name: Token sign, verify and tamper rejection
+        run: bash scripts/test-pkcs11.sh
+
+  api-integration:
+    name: Real API / JWT / CRUE / ledger / mTLS
+    needs: [real-crypto, pkcs11]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/release-toolchain
+      - name: Build API with real OpenSSL TSA verification
+        run: |
+          set -euo pipefail
+          cargo build --release --locked -p api-service --features tsa-cms-openssl
+      - name: Exercise real listeners and cryptographic authentication
+        run: python3 services/api-service/tests/release_integration.py --binary "$GITHUB_WORKSPACE/target/release/api-service"
+
+  docker-smoke:
+    name: Final Docker image smoke test
+    needs: api-integration
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build final image without layer cache
+        run: |
+          set -euo pipefail
+          docker build --pull --no-cache \
+            --build-arg SOURCE_DATE_EPOCH="$(git log -1 --pretty=%ct)" \
+            -f services/api-service/Dockerfile -t rsrp-release:test .
+      - name: Exercise the distroless image as non-root with mounted certificates
+        run: python3 services/api-service/tests/release_integration.py --image rsrp-release:test
+      - name: Preserve the exact tested image and extracted binary
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          container="$(docker create rsrp-release:test)"
+          trap 'docker rm -f "$container" >/dev/null' EXIT
+          docker cp "$container:/app/api-service" release/api-service
+          docker image inspect rsrp-release:test > release/image-inspect.json
+          docker save rsrp-release:test -o release/image.tar
+          (cd release && sha256sum image.tar > image.sha256)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-image
+          path: release/
+          if-no-files-found: error
+          retention-days: 7
+
+  hardening:
+    name: Verify final ELF (PIE / full RELRO / NX / stripped)
+    needs: docker-smoke
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-image
+          path: release/
+      - name: Verify actual final executable, not compilation flags
+        run: |
+          set -euo pipefail
+          (cd release && sha256sum -c image.sha256)
+          bash scripts/verify-release-elf.sh release/api-service release/elf
+          jq -e '.[0].Config.User == "nonroot:nonroot" and .[0].Config.ExposedPorts["8080/tcp"] != null' release/image-inspect.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-hardening
+          path: release/elf/
+          if-no-files-found: error
 
   supply-chain-gate:
     name: Enforce Supply-Chain Policy
-    runs-on: ubuntu-latest
+    needs: hardening
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
     permissions:
       contents: read
 
@@ -139,8 +219,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@1.90.0
+      - uses: ./.github/actions/release-toolchain
 
       - name: Install jq
         run: |
@@ -184,7 +263,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cargo metadata --format-version=1 --locked > metadata.json
+          cargo metadata --format-version=1 --all-features --locked > metadata.json
           jq -e '
             [.packages[]
             | select(.source != null)
@@ -192,13 +271,13 @@ jobs:
             ] | length == 0
           ' metadata.json
 
-      - name: Generate CycloneDX SBOM (gating)
-        run: |
-          set -euo pipefail
-          cargo install cargo-cyclonedx --locked
-          cargo cyclonedx --manifest-path Cargo.toml --all --format json
-          find . -type f \( -name "*.cdx.json" -o -name "bom.json" -o -name "*.bom.json" \) -not -path "./target/*" -print > sbom-files.txt
-          test -s sbom-files.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-image
+          path: release/
+      - uses: ./.github/actions/release-evidence
+        with:
+          directory: release
 
       - name: Upload gate artifacts
         uses: actions/upload-artifact@v4
@@ -206,5 +285,183 @@ jobs:
           name: production-gate-artifacts
           path: |
             metadata.json
-            sbom-files.txt
+            release/sbom*.json
+            release/provenance.json
+            release/image.sha256
           retention-days: 30
+
+  attestations:
+    name: Sign and verify release evidence (trusted runs only)
+    needs: supply-chain-gate
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: production-gate-artifacts
+          path: evidence/
+      - uses: sigstore/cosign-installer@v3.10.1
+        if: github.event_name != 'pull_request'
+      - name: Bind SBOM, SLSA-format provenance and tested image digest
+        if: github.event_name != 'pull_request'
+        env:
+          CERTIFICATE_IDENTITY: https://github.com/${{ github.workflow_ref }}
+        run: |
+          set -euo pipefail
+          tar -czf release-evidence.tar.gz -C evidence .
+          cosign sign-blob --yes \
+            --output-signature release-evidence.sig \
+            --output-certificate release-evidence.pem release-evidence.tar.gz
+          cosign verify-blob \
+            --certificate release-evidence.pem --signature release-evidence.sig \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity "$CERTIFICATE_IDENTITY" release-evidence.tar.gz
+      - name: PR validation is not release certification
+        if: github.event_name == 'pull_request'
+        run: echo "Signing requires a trusted push/dispatch run; PR checks do not authorize a release." >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: github.event_name != 'pull_request'
+        with:
+          name: signed-release-evidence
+          path: |
+            release-evidence.tar.gz
+            release-evidence.sig
+            release-evidence.pem
+          if-no-files-found: error
+          retention-days: 30
+
+  negative-and-fuzz:
+    name: Negative regressions and bounded fuzzing
+    needs: attestations
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [dsl_parser, proof_envelope_decode, log_entry_deserialize]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/release-toolchain
+        with:
+          toolchain: nightly-2026-09-01
+      - name: Run ledger and proof negative regressions
+        run: |
+          set -euo pipefail
+          cargo test --locked -p rsrp-proof-engine -p rsrp-immutable-ledger -- --test-threads=1
+          python3 scripts/interop/verify_proof_envelope_v1_vectors.py
+      - name: Install pinned fuzz runner
+        run: cargo install cargo-fuzz --version 0.13.2 --locked
+      - name: Fuzz actual registered target (crashes fail the gate)
+        env:
+          FUZZ_TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          cargo fetch --manifest-path fuzz/Cargo.toml --locked
+          # cargo-fuzz has no --locked option: prefetch locked, run offline, then reject lockfile drift.
+          CARGO_NET_OFFLINE=true cargo fuzz run "$FUZZ_TARGET" -- \
+            -max_total_time=60 -timeout=10 -rss_limit_mb=2048 -max_len=65536
+          git diff --exit-code -- Cargo.lock fuzz/Cargo.lock
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fuzz-${{ matrix.target }}
+          path: |
+            fuzz/artifacts/
+            fuzz/corpus/
+          if-no-files-found: ignore
+
+  reproducible-build:
+    name: Independent clean build (${{ matrix.replica }})
+    needs: negative-and-fuzz
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        replica: [a, b]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/release-toolchain
+      - name: Rebuild the final image on a fresh runner
+        run: |
+          set -euo pipefail
+          docker build --pull --no-cache \
+            --build-arg SOURCE_DATE_EPOCH="$(git log -1 --pretty=%ct)" \
+            -f services/api-service/Dockerfile -t rsrp-rebuild:test .
+          mkdir -p release
+          container="$(docker create rsrp-rebuild:test)"
+          trap 'docker rm -f "$container" >/dev/null' EXIT
+          docker cp "$container:/app/api-service" release/api-service
+          bash scripts/verify-release-elf.sh release/api-service release/elf
+      - uses: ./.github/actions/release-evidence
+        with:
+          directory: release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reproducible-${{ matrix.replica }}
+          path: release/
+          if-no-files-found: error
+          retention-days: 7
+
+  release-gate:
+    name: Release closure (no automatic publication)
+    if: always()
+    needs:
+      - feature-matrix
+      - production-profile
+      - workspace-tests
+      - real-crypto
+      - pkcs11
+      - api-integration
+      - docker-smoke
+      - hardening
+      - supply-chain-gate
+      - attestations
+      - negative-and-fuzz
+      - reproducible-build
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - name: Fail closed on any failed, skipped or cancelled prerequisite
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          jq -e 'all(.[]; .result == "success")' <<< "$RESULTS"
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-image
+          path: original/
+      - uses: actions/download-artifact@v4
+        with:
+          name: production-gate-artifacts
+          path: evidence/
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: reproducible-*
+          path: rebuilds/
+      - name: Compare clean builds with each other and the tested artifact
+        run: |
+          set -euo pipefail
+          (cd original && sha256sum -c image.sha256)
+          for replica in a b; do
+            directory="rebuilds/reproducible-$replica"
+            cmp original/api-service "$directory/api-service"
+            cmp evidence/release/sbom.canonical.json "$directory/sbom.canonical.json"
+            # Invocation metadata/signatures differ by design; compare subjects and all build inputs.
+            jq -S '{subject, buildDefinition: .predicate.buildDefinition}' \
+              evidence/release/provenance.json > expected-provenance.json
+            jq -S '{subject, buildDefinition: .predicate.buildDefinition}' \
+              "$directory/provenance.json" > actual-provenance.json
+            cmp expected-provenance.json actual-provenance.json
+          done
+          {
+            echo "All release validation stages passed for $GITHUB_SHA."
+            echo "Reproducibility covers the final ELF and canonical Cargo SBOM, not Docker tar metadata."
+            echo "PKCS11 coverage is an external SoftHSM2 module test; the API has no real PKCS11 backend."
+            echo "No tag/release is published. PR runs are unsigned and require a trusted run before release."
+          } >> "$GITHUB_STEP_SUMMARY"
