@@ -353,6 +353,8 @@ jobs:
           set -euo pipefail
           cargo test --locked -p rsrp-proof-engine -p rsrp-immutable-ledger -- --test-threads=1
           python3 scripts/interop/verify_proof_envelope_v1_vectors.py
+          go run scripts/interop/verify_proof_envelope_v1_vectors.go
+          npx --yes tsx scripts/interop/verify_proof_envelope_v1_vectors.ts
       - name: Install pinned fuzz runner
         run: cargo install cargo-fuzz --version 0.13.2 --locked
       - name: Fuzz actual registered target (crashes fail the gate)
