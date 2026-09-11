@@ -74,6 +74,44 @@ def verify_vector(v: dict) -> None:
     assert digest == v["canonical_bytes_sha256_hex"], f"{v['id']}: sha256 mismatch"
 
 
+def verify_negative_case(case: dict, vectors_by_id: dict) -> None:
+    source = vectors_by_id[case["source_vector"]]
+    signing = bytearray(hex_to_bytes(source["signing_bytes_hex"]))
+    canonical = bytearray(hex_to_bytes(source["canonical_bytes_hex"]))
+    mutation = case["mutation"]
+    if mutation == "flip_signing_byte_6":
+        signing[6] ^= 1
+        canonical[6] ^= 1
+    elif mutation == "flip_last_signature_byte":
+        canonical[-1] ^= 1
+    elif mutation == "set_version_2":
+        signing[0] = canonical[0] = 2
+    elif mutation == "set_decision_0":
+        signing[134] = canonical[134] = 0
+    elif mutation == "append_zero_byte":
+        canonical.append(0)
+    else:
+        raise AssertionError(f"{case['id']}: unknown mutation {mutation}")
+
+    if canonical[0] != 1:
+        actual_error = "UNSUPPORTED_VERSION"
+    elif canonical[134] not in (1, 2, 3, 4):
+        actual_error = "UNKNOWN_DECISION"
+    elif len(canonical) != len(signing) + 4 + int.from_bytes(canonical[len(signing):len(signing) + 4], "big"):
+        actual_error = "TRAILING_BYTES"
+    else:
+        public_key = Ed25519PublicKey.from_public_bytes(hex_to_bytes(source["ed25519_public_key_hex"]))
+        try:
+            public_key.verify(bytes(canonical[-64:]), bytes(signing))
+        except InvalidSignature:
+            actual_error = "INVALID_SIGNATURE"
+        else:
+            actual_error = "VALID"
+    assert actual_error == case["expected_error"], (
+        f"{case['id']}: expected {case['expected_error']}, got {actual_error}"
+    )
+
+
 def main() -> None:
     repo_root = Path(__file__).resolve().parents[2]
     vectors_path = repo_root / "docs" / "PROOF_ENVELOPE_V1_TEST_VECTORS.json"
@@ -87,7 +125,13 @@ def main() -> None:
     for v in vectors:
         verify_vector(v)
 
-    print(f"ok: {len(vectors)} ProofEnvelopeV1 vector(s) verified")
+    negative_cases = data.get("negative_cases", [])
+    assert negative_cases, "negative vector corpus must not be empty"
+    vectors_by_id = {vector["id"]: vector for vector in vectors}
+    for case in negative_cases:
+        verify_negative_case(case, vectors_by_id)
+
+    print(f"ok: {len(vectors)} positive and {len(negative_cases)} negative ProofEnvelopeV1 vector(s) verified")
 
 
 if __name__ == "__main__":
