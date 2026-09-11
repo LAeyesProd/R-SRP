@@ -65,5 +65,6 @@ This policy enforces verifiable software integrity from source to released artif
 ## 10. Evidence Locations
 
 - Policy config: `deny.toml`
-- CI gates: `.github/workflows/production-gate.yml`, `.github/workflows/reproducible-build.yml`, `.github/workflows/sbom.yml`, `.github/workflows/signing.yml`
+- CI gates: `.github/workflows/production-gate.yml`, `.github/workflows/build-toe.yml`, `.github/workflows/reproducible-build.yml`, `.github/workflows/sbom.yml`, `.github/workflows/provenance.yml`, `.github/workflows/certification-gate.yml`
 - Certification mapping: `docs/CERTIFICATION_BUNDLE.md`
+- Security owner sign-off policy: `certification/SECURITY_OWNER_SIGNOFF.md`

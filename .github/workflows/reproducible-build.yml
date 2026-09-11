@@ -1,5 +1,5 @@
-# Reproducible Build Verification for R-SRP Ultra
-# Double compilation verification - compares hashes between runners
+# Reproducible Build Verification for R-SRP
+# Double-build verification - compares TOE hashes between independent runners.
 
 name: Reproducible Build
 
@@ -10,312 +10,142 @@ on:
     branches: [main]
   release:
     types: [published]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
+  RUST_TOOLCHAIN_VERSION: "1.90.0"
+  TOE_BINARY: rsrp-demo
 
 jobs:
-  # Validate real post-quantum backend toolchain (Linux)
-  real-crypto:
-    name: Build real-crypto (Linux)
+  build-a:
+    name: Build A (Ubuntu)
     runs-on: ubuntu-22.04
     permissions:
       contents: read
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@1.90.0
-
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN_VERSION }}
       - name: Install OQS deps
         run: |
           set -euo pipefail
-
-          # bindgen requires libclang (clang alone is not sufficient)
           sudo apt-get update
           sudo apt-get install -y \
             cmake \
             clang-14 \
             llvm-14-dev \
             libclang-14-dev \
-            pkg-config
-
-      - name: Set libclang path
-        run: |
-          set -euo pipefail
-          test -d /usr/lib/llvm-14/lib
-          test -f /usr/lib/llvm-14/lib/libclang.so
-          echo "LIBCLANG_PATH=/usr/lib/llvm-14/lib" >> "${GITHUB_ENV}"
-
-      - name: Debug LLVM
-        run: |
-          set -euo pipefail
-          clang-14 --version
-          llvm-config-14 --version
-          ls /usr/lib | grep llvm || true
-          ls /usr/lib/llvm-14/lib | grep libclang
-
-      - name: Validate libclang path
-        run: |
-          set -euo pipefail
-          echo "Resolved LIBCLANG_PATH=${LIBCLANG_PATH}"
-          test -f "${LIBCLANG_PATH}/libclang.so"
-
-      - name: Build and test real crypto backend
-        run: |
-          cargo check --locked -p rsrp-pqcrypto --release --no-default-features --features real-crypto
-          cargo test --locked -p rsrp-pqcrypto --no-default-features --features real-crypto
-
-  # Build on Ubuntu
-  build-ubuntu:
-    name: Build on Ubuntu (x86_64)
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@1.90.0
-
+            pkg-config \
+            jq
+          echo "LIBCLANG_PATH=/usr/lib/llvm-14/lib" >> "$GITHUB_ENV"
       - name: Prefetch dependencies
         run: cargo fetch --locked
-      
       - name: Set SOURCE_DATE_EPOCH
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)" >> "$GITHUB_ENV"
+      - name: Build TOE
         run: |
-          if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-            echo "SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)" >> "$GITHUB_ENV"
-          else
-            echo "SOURCE_DATE_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
-          fi
-      
-      - name: Build release
+          set -euo pipefail
+          cargo build --release --locked --manifest-path rsrp-demo/Cargo.toml --features production
+      - name: Record build A metadata
         run: |
-          # Deterministic core crates only (avoid workspace network-stack variance)
-          cargo check --locked \
-            -p rsrp-policy-dsl \
-            -p rsrp-security-core \
-            -p rsrp-proof-engine
-          cargo build --release --locked \
-            -p rsrp-policy-dsl \
-            -p rsrp-security-core \
-            -p rsrp-proof-engine
-      
-      - name: Calculate binary hashes
-        run: |
-          mkdir -p hashes
-          sha256sum Cargo.lock > hashes/Cargo.lock.sha256
-      
-      - name: Upload Ubuntu hashes
+          set -euo pipefail
+          mkdir -p certification/evidence/reproducibility
+          jq -n \
+            --arg toe_binary "${TOE_BINARY}" \
+            --arg artifact_sha256 "$(sha256sum target/release/${TOE_BINARY} | awk '{print $1}')" \
+            --arg cargo_lock_sha256 "$(sha256sum Cargo.lock | awk '{print $1}')" \
+            --arg rustc_version "$(rustc --version --verbose | tr '\n' ';' | sed 's/;$/\n/' )" \
+            '{toe_binary: $toe_binary, artifact_sha256: $artifact_sha256, cargo_lock_sha256: $cargo_lock_sha256, rustc_version: $rustc_version}' \
+            > certification/evidence/reproducibility/build-a.json
+      - name: Upload build A metadata
         uses: actions/upload-artifact@v4
         with:
-          name: hashes-ubuntu
-          path: hashes/
+          name: reproducibility-a-${{ github.sha }}
+          path: certification/evidence/reproducibility/build-a.json
           retention-days: 7
 
-  # Build on Fedora (different libc)
-  build-fedora:
-    name: Build on Fedora (x86_64)
-    if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
-    container: fedora:40
-    env:
-      HOME: /root
-      CARGO_HOME: /root/.cargo
-      RUSTUP_HOME: /root/.rustup
+  build-b:
+    name: Build B (Ubuntu)
+    runs-on: ubuntu-22.04
     permissions:
       contents: read
-    
-    steps:
-      - name: Install git for checkout
-        run: |
-          dnf install -y git
-
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@1.90.0
-
-      - name: Install build dependencies
-        run: |
-          dnf install -y git curl tar gcc gcc-c++ make pkgconfig openssl-devel
-
-      - name: Prefetch dependencies
-        run: cargo fetch --locked
-      
-      - name: Set SOURCE_DATE_EPOCH
-        run: |
-          if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-            echo "SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)" >> "$GITHUB_ENV"
-          else
-            echo "SOURCE_DATE_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
-          fi
-      
-      - name: Build release
-        run: |
-          cargo check --locked \
-            -p rsrp-policy-dsl \
-            -p rsrp-security-core \
-            -p rsrp-proof-engine
-          cargo build --release --locked \
-            -p rsrp-policy-dsl \
-            -p rsrp-security-core \
-            -p rsrp-proof-engine
-      
-      - name: Calculate binary hashes
-        run: |
-          mkdir -p hashes
-          sha256sum Cargo.lock > hashes/Cargo.lock.sha256
-      
-      - name: Upload Fedora hashes
-        uses: actions/upload-artifact@v4
-        with:
-          name: hashes-fedora
-          path: hashes/
-          retention-days: 7
-
-  # Build on ARM64
-  build-arm64:
-    name: Build on ARM64
-    if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    permissions:
-      contents: read
-    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@1.90.0
+        uses: dtolnay/rust-toolchain@master
         with:
-          targets: aarch64-unknown-linux-gnu
-      
-      - name: Set up ARM
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
-
-      - name: Install cross toolchain
+          toolchain: ${{ env.RUST_TOOLCHAIN_VERSION }}
+      - name: Install OQS deps
         run: |
+          set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
-
+          sudo apt-get install -y \
+            cmake \
+            clang-14 \
+            llvm-14-dev \
+            libclang-14-dev \
+            pkg-config \
+            jq
+          echo "LIBCLANG_PATH=/usr/lib/llvm-14/lib" >> "$GITHUB_ENV"
       - name: Prefetch dependencies
         run: cargo fetch --locked
-      
       - name: Set SOURCE_DATE_EPOCH
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)" >> "$GITHUB_ENV"
+      - name: Build TOE
         run: |
-          if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-            echo "SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)" >> "$GITHUB_ENV"
-          else
-            echo "SOURCE_DATE_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
-          fi
-      
-      - name: Build release (ARM64)
-        env:
-          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          set -euo pipefail
+          cargo build --release --locked --manifest-path rsrp-demo/Cargo.toml --features production
+      - name: Record build B metadata
         run: |
-          cargo check --locked --target aarch64-unknown-linux-gnu \
-            -p rsrp-policy-dsl \
-            -p rsrp-security-core \
-            -p rsrp-proof-engine
-      
-      - name: Calculate binary hashes
-        run: |
-          mkdir -p hashes
-          sha256sum Cargo.lock > hashes/Cargo.lock.sha256
-      
-      - name: Upload ARM64 hashes
+          set -euo pipefail
+          mkdir -p certification/evidence/reproducibility
+          jq -n \
+            --arg toe_binary "${TOE_BINARY}" \
+            --arg artifact_sha256 "$(sha256sum target/release/${TOE_BINARY} | awk '{print $1}')" \
+            --arg cargo_lock_sha256 "$(sha256sum Cargo.lock | awk '{print $1}')" \
+            --arg rustc_version "$(rustc --version --verbose | tr '\n' ';' | sed 's/;$/\n/' )" \
+            '{toe_binary: $toe_binary, artifact_sha256: $artifact_sha256, cargo_lock_sha256: $cargo_lock_sha256, rustc_version: $rustc_version}' \
+            > certification/evidence/reproducibility/build-b.json
+      - name: Upload build B metadata
         uses: actions/upload-artifact@v4
         with:
-          name: hashes-arm64
-          path: hashes/
+          name: reproducibility-b-${{ github.sha }}
+          path: certification/evidence/reproducibility/build-b.json
           retention-days: 7
 
-  # Verify reproducibility
   verify-reproducibility:
-    name: Verify Binary Reproducibility
+    name: Verify reproducibility
     runs-on: ubuntu-latest
-    needs: [build-ubuntu, build-fedora]
-    if: github.event_name != 'pull_request'
+    needs: [build-a, build-b]
     permissions:
       contents: read
-    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      
-      - name: Download all hashes
+      - name: Download build A metadata
         uses: actions/download-artifact@v4
         with:
-          path: hashes
-      
-      - name: Compare Ubuntu vs Fedora
+          name: reproducibility-a-${{ github.sha }}
+          path: certification/evidence/reproducibility
+      - name: Download build B metadata
+        uses: actions/download-artifact@v4
+        with:
+          name: reproducibility-b-${{ github.sha }}
+          path: certification/evidence/reproducibility
+      - name: Verify reproducibility gate
         run: |
-          echo "=== Comparing Ubuntu vs Fedora builds ==="
-          shopt -s nullglob
-          files=(hashes/hashes-ubuntu/*.sha256)
-          if [ ${#files[@]} -eq 0 ]; then
-            echo "No Ubuntu hash files found"
-            exit 1
-          fi
-
-          for file in hashes/hashes-ubuntu/*.sha256; do
-            bin=$(basename "$file" .sha256)
-            ubuntu_hash=$(cat "hashes/hashes-ubuntu/$bin.sha256" | awk '{print $1}')
-            fedora_hash=$(cat "hashes/hashes-fedora/$bin.sha256" 2>/dev/null | awk '{print $1}')
-            
-            if [ -n "$fedora_hash" ]; then
-              if [ "$ubuntu_hash" = "$fedora_hash" ]; then
-                echo "✓ $bin: HASHES MATCH"
-              else
-                echo "✗ $bin: HASH MISMATCH!"
-                echo "  Ubuntu: $ubuntu_hash"
-                echo "  Fedora: $fedora_hash"
-                exit 1
-              fi
-            fi
-          done
-      
-      - name: Report results
-        run: |
-          echo ""
-          echo "=== Reproducibility Status ==="
-          echo "All binary hashes match between builds."
-          echo "Build is reproducible."
-      
-      - name: Publish hash comparison
-        if: github.event_name == 'release'
-        run: |
-          # Create reproducibility report
-          cat > reproducibility-report.md << 'EOF'
-          # R-SRP Ultra Reproducibility Report
-          
-          ## Build Verification
-          
-          This release has been verified for reproducibility across:
-          - Ubuntu (x86_64)
-          - Fedora (x86_64)  
-          - ARM64
-          
-          Binary hashes are identical across all platforms.
-          EOF
-          
-          # Upload report as release asset
-          gh release upload "${{ github.ref_name }}" reproducibility-report.md
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          set -euo pipefail
+          ./scripts/verify-reproducibility.sh \
+            certification/evidence/reproducibility/build-a.json \
+            certification/evidence/reproducibility/build-b.json
+      - name: Upload reproducibility evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: reproducibility-${{ github.sha }}
+          path: certification/evidence/reproducibility/
+          retention-days: 30

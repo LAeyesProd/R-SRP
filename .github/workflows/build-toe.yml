@@ -1,0 +1,75 @@
+name: Build TOE
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_TOOLCHAIN_VERSION: "1.90.0"
+  TOE_BINARY: rsrp-demo
+
+jobs:
+  build-toe:
+    name: Build TOE binary
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN_VERSION }}
+
+      - name: Install OQS build dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake \
+            clang-14 \
+            llvm-14-dev \
+            libclang-14-dev \
+            pkg-config \
+            jq
+          echo "LIBCLANG_PATH=/usr/lib/llvm-14/lib" >> "$GITHUB_ENV"
+
+      - name: Prefetch dependencies
+        run: cargo fetch --locked
+
+      - name: Set deterministic build epoch
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --pretty=%ct)" >> "$GITHUB_ENV"
+
+      - name: Build TOE release artifact
+        run: |
+          set -euo pipefail
+          cargo build --release --locked --manifest-path rsrp-demo/Cargo.toml --features production
+
+      - name: Record TOE evidence
+        run: |
+          set -euo pipefail
+          mkdir -p certification/evidence/toe
+          cp target/release/${TOE_BINARY} certification/evidence/toe/${TOE_BINARY}
+          sha256sum certification/evidence/toe/${TOE_BINARY} > certification/evidence/toe/${TOE_BINARY}.sha256
+          jq -n \
+            --arg toe_binary "${TOE_BINARY}" \
+            --arg artifact_sha256 "$(awk '{print $1}' certification/evidence/toe/${TOE_BINARY}.sha256)" \
+            --arg cargo_lock_sha256 "$(sha256sum Cargo.lock | awk '{print $1}')" \
+            --arg rustc_version "$(rustc --version --verbose | tr '\n' ';' | sed 's/;$/\n/' )" \
+            --arg git_sha "${GITHUB_SHA}" \
+            '{toe_binary: $toe_binary, artifact_sha256: $artifact_sha256, cargo_lock_sha256: $cargo_lock_sha256, rustc_version: $rustc_version, git_sha: $git_sha}' \
+            > certification/evidence/toe/build-info.json
+
+      - name: Upload TOE evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: toe-build-${{ github.sha }}
+          path: certification/evidence/toe/
+          retention-days: 30
