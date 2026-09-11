@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.10.0 - Unreleased
+
+### Proof verification hardening
+
+- Reject unsupported `ProofEnvelopeV1` schema/encoding versions and decision codes before signature verification.
+- Add fail-closed Ed25519 verification bound to the expected `ProofBinding` and signer key ID.
+- Strengthen Python, TypeScript and Go interop checks and make all three release-gating.
+- The canonical Ed25519 fixture is being regenerated before the format freeze; `ProofEnvelopeV1` remains draft until that consistency check is closed.
+
 ## 0.9.4 - 2026-02-26
 
 ### Security
