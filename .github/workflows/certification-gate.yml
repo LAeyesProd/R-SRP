@@ -454,8 +454,10 @@ jobs:
       - name: Package certification evidence
         run: |
           set -euo pipefail
-          tar -czf certification/evidence/rsrp-certification-evidence-${GITHUB_SHA}.tar.gz -C certification/evidence .
-          sha256sum certification/evidence/rsrp-certification-evidence-${GITHUB_SHA}.tar.gz > certification/evidence/rsrp-certification-evidence-${GITHUB_SHA}.tar.gz.sha256
+          archive="rsrp-certification-evidence-${GITHUB_SHA}.tar.gz"
+          tar -czf "${RUNNER_TEMP}/${archive}" -C certification/evidence .
+          mv "${RUNNER_TEMP}/${archive}" certification/evidence/
+          sha256sum "certification/evidence/${archive}" > "certification/evidence/${archive}.sha256"
       - name: Upload certification evidence bundle
         uses: actions/upload-artifact@v4
         with:

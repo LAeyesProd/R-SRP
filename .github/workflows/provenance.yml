@@ -1,27 +1,31 @@
 name: Provenance
 
 on:
-  push:
-    branches: [main, develop]
-  pull_request:
-    branches: [main]
-  workflow_dispatch:
+  workflow_run:
+    workflows: ["Build TOE"]
+    types: [completed]
 
 env:
   CARGO_TERM_COLOR: always
   COSIGN_EXPERIMENTAL: "1"
+  SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+  SOURCE_REF: ${{ github.event.workflow_run.head_branch }}
 
 jobs:
   provenance:
     name: Generate signed in-toto provenance
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: read
       id-token: write
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
 
       - name: Install jq
         run: |
@@ -35,8 +39,11 @@ jobs:
       - name: Download TOE evidence
         uses: actions/download-artifact@v4
         with:
-          name: toe-build-${{ github.sha }}
+          name: toe-build-${{ env.SOURCE_SHA }}
           path: certification/evidence/toe
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ github.event.workflow_run.id }}
 
       - name: Generate provenance statement
         run: |
@@ -46,8 +53,8 @@ jobs:
           CARGO_LOCK_DIGEST="$(sha256sum Cargo.lock | awk '{print $1}')"
           jq -n \
             --arg repo "${GITHUB_REPOSITORY}" \
-            --arg ref "${GITHUB_REF}" \
-            --arg sha "${GITHUB_SHA}" \
+            --arg ref "${SOURCE_REF}" \
+            --arg sha "${SOURCE_SHA}" \
             --arg run_id "${GITHUB_RUN_ID}" \
             --arg started_on "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --arg toe_digest "$TOE_DIGEST" \
@@ -94,7 +101,7 @@ jobs:
           ./scripts/verify-provenance.sh \
             attestations/provenance.intoto.jsonl \
             "$(awk '{print $1}' certification/evidence/toe/rsrp-demo.sha256)" \
-            "${GITHUB_SHA}" \
+            "${SOURCE_SHA}" \
             attestations/provenance.intoto.jsonl.sig \
             attestations/provenance.intoto.jsonl.pem \
             "^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/provenance.yml@.*$"
@@ -102,6 +109,6 @@ jobs:
       - name: Upload provenance evidence
         uses: actions/upload-artifact@v4
         with:
-          name: provenance-${{ github.sha }}
+          name: provenance-${{ env.SOURCE_SHA }}
           path: certification/evidence/provenance/
           retention-days: 30
