@@ -38,6 +38,7 @@ struct Ed25519Vector {
     signer_key_id: &'static str,
     signer_key_derivation_secret_utf8: &'static str,
     ed25519_public_key_hex: String,
+    binding_hash_hex: String,
     policy_hash_hex: String,
     bytecode_hash_hex: String,
     input_hash_hex: String,
@@ -74,13 +75,15 @@ fn main() -> Result<(), String> {
     let signing_bytes = envelope.signing_bytes()?;
     let canonical_bytes = envelope.canonical_bytes()?;
     #[cfg(feature = "pq-proof")]
-    let signature_bytes = match &envelope.signature {
-        SignatureV1::Ed25519(signature) => signature.signature.clone(),
+    let signature = match &envelope.signature {
+        SignatureV1::Ed25519(signature) => signature,
         SignatureV1::Hybrid(_) => return Err("unexpected hybrid fixture".to_string()),
     };
     #[cfg(not(feature = "pq-proof"))]
     let SignatureV1::Ed25519(signature) = &envelope.signature;
     #[cfg(not(feature = "pq-proof"))]
+    let signature_bytes = signature.signature.clone();
+    #[cfg(feature = "pq-proof")]
     let signature_bytes = signature.signature.clone();
 
     let document = VectorDocument {
@@ -101,6 +104,7 @@ fn main() -> Result<(), String> {
             signer_key_id: SIGNER_KEY_ID,
             signer_key_derivation_secret_utf8: DERIVATION_SECRET,
             ed25519_public_key_hex: crypto_core::hash::hex_encode(&key_pair.verifying_key()),
+            binding_hash_hex: crypto_core::hash::hex_encode(&signature.binding_hash),
             policy_hash_hex: binding.policy_hash,
             bytecode_hash_hex: binding.bytecode_hash,
             input_hash_hex: binding.input_hash,
@@ -144,6 +148,24 @@ fn main() -> Result<(), String> {
                 source_vector: "ed25519_fixture_v1_block_00090001",
                 mutation: "append_zero_byte",
                 expected_error: "TRAILING_BYTES",
+            },
+            NegativeCase {
+                id: "reject_truncated_signature",
+                source_vector: "ed25519_fixture_v1_block_00090001",
+                mutation: "truncate_last_byte",
+                expected_error: "TRUNCATED",
+            },
+            NegativeCase {
+                id: "reject_invalid_metadata_length",
+                source_vector: "ed25519_fixture_v1_block_00090001",
+                mutation: "set_metadata_length_zero",
+                expected_error: "INVALID_METADATA",
+            },
+            NegativeCase {
+                id: "reject_invalid_signature_length",
+                source_vector: "ed25519_fixture_v1_block_00090001",
+                mutation: "set_signature_length_63",
+                expected_error: "INVALID_SIGNATURE_LENGTH",
             },
         ],
     };

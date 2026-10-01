@@ -11,7 +11,7 @@ const PROOF_BINDING_SCHEMA_ID: &str = "rsrp.proof.binding.v1";
 const PROOF_ENVELOPE_SERIALIZATION_VERSION: u8 = 1;
 const PROOF_ENVELOPE_SCHEMA_ID: &str = "rsrp.proof.envelope.v1";
 pub const PROOF_ENVELOPE_V1_VERSION: u8 = 1;
-pub const PROOF_ENVELOPE_V1_ENCODING_VERSION: u8 = 1;
+pub const PROOF_ENVELOPE_V1_ENCODING_VERSION: u8 = 2;
 #[cfg(feature = "pq-proof")]
 const PQ_PROOF_ENVELOPE_SERIALIZATION_VERSION: u8 = 1;
 #[cfg(feature = "pq-proof")]
@@ -75,6 +75,7 @@ pub enum SignatureAlgorithmCodeV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct Ed25519SignatureV1 {
     pub key_id_hash: [u8; 32],
+    pub binding_hash: [u8; 32],
     pub signature: Vec<u8>,
 }
 
@@ -332,6 +333,9 @@ impl ProofEnvelopeV1 {
                 if sig.key_id_hash == [0u8; 32] {
                     return Err("empty Ed25519 key identity hash".to_string());
                 }
+                if sig.binding_hash == [0u8; 32] {
+                    return Err("empty Ed25519 binding hash".to_string());
+                }
                 if sig.signature.len() != 64 {
                     return Err("invalid Ed25519 signature length".to_string());
                 }
@@ -359,6 +363,7 @@ impl ProofEnvelopeV1 {
             binding,
             SignatureV1::Ed25519(Ed25519SignatureV1 {
                 key_id_hash: sha256_fixed(signer_key_id.as_ref().as_bytes()),
+                binding_hash: sha256_fixed(&binding.canonical_bytes()?),
                 signature: Vec::new(),
             }),
         )?;
@@ -431,10 +436,16 @@ impl ProofEnvelopeV1 {
         public_key: &[u8],
     ) -> Result<bool, String> {
         self.validate_structure()?;
+        if expected_binding.serialization_version != PROOF_BINDING_SERIALIZATION_VERSION
+            || expected_binding.schema_id != PROOF_BINDING_SCHEMA_ID
+        {
+            return Ok(false);
+        }
         let expected = Self::unsigned_from_binding(
             expected_binding,
             SignatureV1::Ed25519(Ed25519SignatureV1 {
                 key_id_hash: sha256_fixed(expected_signer_key_id.as_bytes()),
+                binding_hash: sha256_fixed(&expected_binding.canonical_bytes()?),
                 signature: Vec::new(),
             }),
         )?;
@@ -461,6 +472,7 @@ impl ProofEnvelopeV1 {
             || self.state_hash != expected.state_hash
             || self.decision_code != expected.decision_code
             || actual_signature.key_id_hash != expected_signature.key_id_hash
+            || actual_signature.binding_hash != expected_signature.binding_hash
         {
             return Ok(false);
         }
@@ -613,9 +625,10 @@ impl SignatureV1 {
     fn meta_bytes(&self) -> Result<Vec<u8>, String> {
         match self {
             SignatureV1::Ed25519(sig) => {
-                let mut out = Vec::with_capacity(1 + 32);
+                let mut out = Vec::with_capacity(1 + 32 + 32);
                 out.push(SignatureAlgorithmCodeV1::Ed25519 as u8);
                 out.extend_from_slice(&sig.key_id_hash);
+                out.extend_from_slice(&sig.binding_hash);
                 Ok(out)
             }
             #[cfg(feature = "pq-proof")]
@@ -644,13 +657,16 @@ impl SignatureV1 {
         }
         match meta[0] {
             x if x == SignatureAlgorithmCodeV1::Ed25519 as u8 => {
-                if meta.len() != 1 + 32 {
+                if meta.len() != 1 + 32 + 32 {
                     return Err("invalid Ed25519 signature metadata length".to_string());
                 }
                 let mut key_id_hash = [0u8; 32];
                 key_id_hash.copy_from_slice(&meta[1..33]);
+                let mut binding_hash = [0u8; 32];
+                binding_hash.copy_from_slice(&meta[33..65]);
                 Ok(SignatureV1::Ed25519(Ed25519SignatureV1 {
                     key_id_hash,
+                    binding_hash,
                     signature: Vec::new(),
                 }))
             }
@@ -1172,14 +1188,12 @@ THEN
         let signing_hex = crypto_core::hash::hex_encode(&env.signing_bytes().unwrap());
         let canonical_hex = crypto_core::hash::hex_encode(&env.canonical_bytes().unwrap());
 
-        assert_eq!(
-            signing_hex,
-            "010100090001111111111111111111111111111111111111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222223333333333333333333333333333333333333333333333333333333333333333444444444444444444444444444444444444444444444444444444444444444402002101e7e331964026891ae93f6f0d4b20c19f95cf20d6c6ba87fd73e287b081a46201"
-        );
-        assert_eq!(
-            canonical_hex,
-            "010100090001111111111111111111111111111111111111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222223333333333333333333333333333333333333333333333333333333333333333444444444444444444444444444444444444444444444444444444444444444402002101e7e331964026891ae93f6f0d4b20c19f95cf20d6c6ba87fd73e287b081a46201000000406dfc53cce34237ad8fdd62a3fc35b1221d18d7503971bdf73ec1f37d0cacfe002cc3405dfa2c046b66a68760c29c55a2fb8c130cc3d926a54645c771989dc000"
-        );
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../docs/PROOF_ENVELOPE_V1_TEST_VECTORS.json"
+        ))
+        .unwrap();
+        assert_eq!(signing_hex, fixture["vectors"][0]["signing_bytes_hex"]);
+        assert_eq!(canonical_hex, fixture["vectors"][0]["canonical_bytes_hex"]);
     }
 
     #[test]
@@ -1231,7 +1245,7 @@ THEN
 
         let mutations: [fn(&mut ProofEnvelopeV1); 3] = [
             |candidate: &mut ProofEnvelopeV1| candidate.version = 2,
-            |candidate: &mut ProofEnvelopeV1| candidate.encoding_version = 2,
+            |candidate: &mut ProofEnvelopeV1| candidate.encoding_version = 3,
             |candidate: &mut ProofEnvelopeV1| candidate.decision_code = 0,
         ];
         for mutate in mutations {
@@ -1273,6 +1287,31 @@ THEN
         assert!(!envelope
             .verify_ed25519_with_binding(&altered_binding, "context-test-key", &pk)
             .unwrap());
+        for mutate in [
+            |b: &mut ProofBinding| b.schema_id = "other.schema".into(),
+            |b: &mut ProofBinding| b.serialization_version = 2,
+            |b: &mut ProofBinding| b.crypto_backend_id = "other-backend".into(),
+        ] {
+            let mut different = binding.clone();
+            mutate(&mut different);
+            assert!(envelope.verify_ed25519(&pk).unwrap());
+            assert!(!envelope
+                .verify_ed25519_with_binding(&different, "context-test-key", &pk)
+                .unwrap());
+            let signed_for_other =
+                ProofEnvelopeV1::sign_ed25519(&different, "context-test-key", &kp).unwrap();
+            assert!(signed_for_other.verify_ed25519(&pk).unwrap());
+            assert!(!signed_for_other
+                .verify_ed25519_with_binding(&binding, "context-test-key", &pk)
+                .unwrap());
+            if different.schema_id != binding.schema_id
+                || different.serialization_version != binding.serialization_version
+            {
+                assert!(!signed_for_other
+                    .verify_ed25519_with_binding(&different, "context-test-key", &pk)
+                    .unwrap());
+            }
+        }
     }
 
     #[test]

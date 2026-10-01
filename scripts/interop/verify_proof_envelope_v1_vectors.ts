@@ -10,6 +10,7 @@ type Vector = {
   encoding_version: number;
   signature_algorithm_code: number;
   signer_key_id: string;
+  binding_hash_hex: string;
   ed25519_public_key_hex: string;
   signature_bytes_hex: string;
   policy_hash_hex: string;
@@ -40,14 +41,50 @@ type NegativeCase = {
 };
 
 function hexToBuf(hex: string): Buffer {
+  if (!/^(?:[0-9a-fA-F]{2})*$/.test(hex)) throw new Error("invalid hex");
   return Buffer.from(hex, "hex");
 }
 
+class ParseError extends Error {}
+
+function parseEnvelope(bytes: Buffer) {
+  let cursor = 0;
+  const read = (length: number): Buffer => {
+    if (bytes.length - cursor < length) throw new ParseError("TRUNCATED");
+    const value = bytes.subarray(cursor, cursor + length);
+    cursor += length;
+    return value;
+  };
+  const version = read(1)[0];
+  const encoding = read(1)[0];
+  const runtime = read(4);
+  const hashes = Array.from({ length: 4 }, () => read(32));
+  const decisionOffset = cursor;
+  const decision = read(1)[0];
+  const metadataLengthOffset = cursor;
+  const metaLen = read(2).readUInt16BE();
+  const metadata = read(metaLen);
+  if (metadata.length !== 65 || metadata[0] !== 1) throw new ParseError("INVALID_METADATA");
+  const signing = bytes.subarray(0, cursor);
+  const sigLen = read(4).readUInt32BE();
+  const signature = read(sigLen);
+  if (sigLen !== 64) throw new ParseError("INVALID_SIGNATURE_LENGTH");
+  if (cursor !== bytes.length) throw new ParseError("TRAILING_BYTES");
+  if (version !== 1 || encoding !== 2) throw new ParseError("UNSUPPORTED_VERSION");
+  if (![1, 2, 3, 4].includes(decision)) throw new ParseError("UNKNOWN_DECISION");
+  if (metadata.subarray(1, 33).equals(Buffer.alloc(32)) || metadata.subarray(33).equals(Buffer.alloc(32)))
+    throw new ParseError("INVALID_METADATA");
+  return { version, encoding, runtime, hashes, decision, metadata, signing, signature, decisionOffset, metadataLengthOffset };
+}
+
 function verifyVector(v: Vector): void {
+  if (v.kind !== "ed25519") throw new Error(`${v.id}: unsupported signature kind`);
   const signing = hexToBuf(v.signing_bytes_hex);
   const canonical = hexToBuf(v.canonical_bytes_hex);
   const keyHash = crypto.createHash("sha256").update(v.signer_key_id, "utf8").digest();
-  const metadata = Buffer.concat([Buffer.from([v.signature_algorithm_code]), keyHash]);
+  const bindingHash = hexToBuf(v.binding_hash_hex);
+  if (bindingHash.length !== 32) throw new Error(`${v.id}: invalid binding hash`);
+  const metadata = Buffer.concat([Buffer.from([v.signature_algorithm_code]), keyHash, bindingHash]);
   const metaLength = Buffer.alloc(2);
   metaLength.writeUInt16BE(metadata.length);
   const reconstructed = Buffer.concat([
@@ -65,42 +102,24 @@ function verifyVector(v: Vector): void {
 
   if (signing.length !== v.signing_bytes_len) throw new Error(`${v.id}: signing len mismatch`);
   if (canonical.length !== v.canonical_bytes_len) throw new Error(`${v.id}: canonical len mismatch`);
-  if (signing.length < 138) throw new Error(`${v.id}: signing bytes too short`);
-  if (canonical.length < signing.length + 4) throw new Error(`${v.id}: canonical bytes too short`);
-  if (!canonical.subarray(0, signing.length).equals(signing)) throw new Error(`${v.id}: canonical prefix mismatch`);
-
-  const sigLen = canonical.readUInt32BE(signing.length);
-  const sig = canonical.subarray(signing.length + 4);
-  if (sig.length !== sigLen) throw new Error(`${v.id}: signature len suffix mismatch`);
-
-  const runtimePacked = signing.subarray(2, 6).toString("hex");
-  if (runtimePacked !== v.runtime_version_packed_u32_be_hex) throw new Error(`${v.id}: runtime pack mismatch`);
-
-  const decisionCode = signing[134];
-  if (decisionCode !== v.decision_code) throw new Error(`${v.id}: decision code mismatch`);
-  if (signing[0] !== 1 || signing[0] !== v.proof_envelope_version) throw new Error(`${v.id}: envelope version mismatch`);
-  if (signing[1] !== 1 || signing[1] !== v.encoding_version) throw new Error(`${v.id}: encoding version mismatch`);
-  if (![1, 2, 3, 4].includes(decisionCode)) throw new Error(`${v.id}: unknown decision code`);
-
-  const metaLen = signing.readUInt16BE(135);
-  const meta = signing.subarray(137);
-  if (meta.length !== metaLen) throw new Error(`${v.id}: signature metadata length mismatch`);
-  if (meta[0] !== v.signature_algorithm_code) throw new Error(`${v.id}: algorithm code mismatch`);
+  const parsed = parseEnvelope(canonical);
+  if (!parsed.signing.equals(signing) || !parsed.runtime.equals(hexToBuf(v.runtime_version_packed_u32_be_hex)) ||
+      parsed.hashes.some((hash, i) => !hash.equals(hexToBuf([v.policy_hash_hex, v.bytecode_hash_hex, v.input_hash_hex, v.state_hash_hex][i]))) ||
+      parsed.version !== v.proof_envelope_version || parsed.encoding !== v.encoding_version ||
+      parsed.decision !== v.decision_code || !parsed.metadata.equals(metadata))
+    throw new Error(`${v.id}: parsed field mismatch`);
   if (v.kind === "ed25519") {
-    if (metaLen !== 33) throw new Error(`${v.id}: invalid Ed25519 metadata length`);
-    if (!meta.subarray(1).equals(keyHash)) throw new Error(`${v.id}: signer key id hash mismatch`);
-    if (sigLen !== 64) throw new Error(`${v.id}: invalid Ed25519 signature length`);
-    if (sig.toString("hex") !== v.signature_bytes_hex) throw new Error(`${v.id}: signature bytes mismatch`);
+    if (parsed.signature.toString("hex") !== v.signature_bytes_hex) throw new Error(`${v.id}: signature bytes mismatch`);
     const spkiPrefix = Buffer.from("302a300506032b6570032100", "hex");
     const publicKey = crypto.createPublicKey({
       key: Buffer.concat([spkiPrefix, hexToBuf(v.ed25519_public_key_hex)]),
       format: "der",
       type: "spki",
     });
-    if (!crypto.verify(null, signing, publicKey, sig)) throw new Error(`${v.id}: Ed25519 signature verification failed`);
+    if (!crypto.verify(null, parsed.signing, publicKey, parsed.signature)) throw new Error(`${v.id}: Ed25519 signature verification failed`);
     const tampered = Buffer.from(signing);
-    tampered[6] ^= 1;
-    if (crypto.verify(null, tampered, publicKey, sig)) throw new Error(`${v.id}: tampered payload signature accepted`);
+    tampered[2 + parsed.runtime.length] ^= 1;
+    if (crypto.verify(null, tampered, publicKey, parsed.signature)) throw new Error(`${v.id}: tampered payload signature accepted`);
   }
 
   const digest = crypto.createHash("sha256").update(canonical).digest("hex");
@@ -110,27 +129,31 @@ function verifyVector(v: Vector): void {
 function verifyNegativeCase(test: NegativeCase, vectors: Map<string, Vector>): void {
   const source = vectors.get(test.source_vector);
   if (!source) throw new Error(`${test.id}: source vector not found`);
-  const signing = Buffer.from(source.signing_bytes_hex, "hex");
-  const canonical = Buffer.from(source.canonical_bytes_hex, "hex");
+  const canonical = Buffer.from(hexToBuf(source.canonical_bytes_hex));
+  const parsed = parseEnvelope(canonical);
   let mutatedCanonical = canonical;
   switch (test.mutation) {
-    case "flip_signing_byte_6": signing[6] ^= 1; canonical[6] ^= 1; break;
+    case "flip_signing_byte_6": canonical[2 + parsed.runtime.length] ^= 1; break;
     case "flip_last_signature_byte": canonical[canonical.length - 1] ^= 1; break;
-    case "set_version_2": signing[0] = canonical[0] = 2; break;
-    case "set_decision_0": signing[134] = canonical[134] = 0; break;
+    case "set_version_2": canonical[0] = 2; break;
+    case "set_decision_0": canonical[parsed.decisionOffset] = 0; break;
     case "append_zero_byte": mutatedCanonical = Buffer.concat([canonical, Buffer.from([0])]); break;
+    case "truncate_last_byte": mutatedCanonical = canonical.subarray(0, -1); break;
+    case "set_metadata_length_zero": canonical.writeUInt16BE(0, parsed.metadataLengthOffset); break;
+    case "set_signature_length_63": canonical.writeUInt32BE(63, parsed.signing.length); break;
     default: throw new Error(`${test.id}: unknown mutation ${test.mutation}`);
   }
   let actualError: string;
-  if (mutatedCanonical[0] !== 1) actualError = "UNSUPPORTED_VERSION";
-  else if (![1, 2, 3, 4].includes(mutatedCanonical[134])) actualError = "UNKNOWN_DECISION";
-  else if (mutatedCanonical.length !== signing.length + 4 + mutatedCanonical.readUInt32BE(signing.length)) actualError = "TRAILING_BYTES";
-  else {
+  try {
+    const decoded = parseEnvelope(mutatedCanonical);
     const key = crypto.createPublicKey({
       key: Buffer.concat([Buffer.from("302a300506032b6570032100", "hex"), hexToBuf(source.ed25519_public_key_hex)]),
       format: "der", type: "spki",
     });
-    actualError = crypto.verify(null, signing, key, mutatedCanonical.subarray(-64)) ? "VALID" : "INVALID_SIGNATURE";
+    actualError = crypto.verify(null, decoded.signing, key, decoded.signature) ? "VALID" : "INVALID_SIGNATURE";
+  } catch (error) {
+    if (!(error instanceof ParseError)) throw error;
+    actualError = error.message;
   }
   if (actualError !== test.expected_error) throw new Error(`${test.id}: expected ${test.expected_error}, got ${actualError}`);
 }

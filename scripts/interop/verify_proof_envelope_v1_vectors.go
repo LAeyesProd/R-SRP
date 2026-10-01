@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -18,6 +20,7 @@ type vector struct {
 	EncodingVersion            int    `json:"encoding_version"`
 	SignatureAlgorithmCode     int    `json:"signature_algorithm_code"`
 	SignerKeyID                string `json:"signer_key_id"`
+	BindingHashHex             string `json:"binding_hash_hex"`
 	Ed25519PublicKeyHex        string `json:"ed25519_public_key_hex"`
 	SignatureBytesHex          string `json:"signature_bytes_hex"`
 	PolicyHashHex              string `json:"policy_hash_hex"`
@@ -47,45 +50,143 @@ type negativeCase struct {
 	ExpectedError string `json:"expected_error"`
 }
 
+type envelope struct {
+	signing, signature, runtime, metadata []byte
+	hashes                                [4][]byte
+	version, encoding, decision           byte
+	decisionOffset, metadataLengthOffset  int
+}
+
+func parseEnvelope(data []byte) (envelope, string) {
+	var result envelope
+	cursor := 0
+	read := func(n int) ([]byte, bool) {
+		if len(data)-cursor < n {
+			return nil, false
+		}
+		value := data[cursor : cursor+n]
+		cursor += n
+		return value, true
+	}
+	readField := func(n int) ([]byte, string) {
+		value, ok := read(n)
+		if !ok {
+			return nil, "TRUNCATED"
+		}
+		return value, ""
+	}
+	version, err := readField(1)
+	if err != "" {
+		return result, err
+	}
+	result.version = version[0]
+	encoding, err := readField(1)
+	if err != "" {
+		return result, err
+	}
+	result.encoding = encoding[0]
+	result.runtime, err = readField(4)
+	if err != "" {
+		return result, err
+	}
+	for i := range result.hashes {
+		result.hashes[i], err = readField(32)
+		if err != "" {
+			return result, err
+		}
+	}
+	result.decisionOffset = cursor
+	decision, err := readField(1)
+	if err != "" {
+		return result, err
+	}
+	result.decision = decision[0]
+	result.metadataLengthOffset = cursor
+	metaLen, err := readField(2)
+	if err != "" {
+		return result, err
+	}
+	result.metadata, err = readField(int(binary.BigEndian.Uint16(metaLen)))
+	if err != "" {
+		return result, err
+	}
+	if len(result.metadata) != 65 || result.metadata[0] != 1 {
+		return result, "INVALID_METADATA"
+	}
+	result.signing = data[:cursor]
+	sigLen, err := readField(4)
+	if err != "" {
+		return result, err
+	}
+	size := binary.BigEndian.Uint32(sigLen)
+	if uint64(size) > uint64(len(data)-cursor) {
+		return result, "TRUNCATED"
+	}
+	result.signature, err = readField(int(size))
+	if err != "" {
+		return result, err
+	}
+	if size != ed25519.SignatureSize {
+		return result, "INVALID_SIGNATURE_LENGTH"
+	}
+	if cursor != len(data) {
+		return result, "TRAILING_BYTES"
+	}
+	if result.version != 1 || result.encoding != 2 {
+		return result, "UNSUPPORTED_VERSION"
+	}
+	if result.decision < 1 || result.decision > 4 {
+		return result, "UNKNOWN_DECISION"
+	}
+	if bytes.Equal(result.metadata[1:33], make([]byte, 32)) || bytes.Equal(result.metadata[33:], make([]byte, 32)) {
+		return result, "INVALID_METADATA"
+	}
+	return result, ""
+}
+
 func verifyNegativeCase(test negativeCase, vectors map[string]vector) {
 	source, ok := vectors[test.SourceVector]
 	if !ok {
 		fail("%s: source vector not found", test.ID)
 	}
-	signing, _ := hex.DecodeString(source.SigningBytesHex)
-	canonical, _ := hex.DecodeString(source.CanonicalBytesHex)
+	canonical, decodeErr := hex.DecodeString(source.CanonicalBytesHex)
+	if decodeErr != nil {
+		fail("%s: invalid source hex: %v", test.ID, decodeErr)
+	}
+	parsed, parseErr := parseEnvelope(canonical)
+	if parseErr != "" {
+		fail("%s: invalid source: %s", test.ID, parseErr)
+	}
 	switch test.Mutation {
 	case "flip_signing_byte_6":
-		signing[6] ^= 1
-		canonical[6] ^= 1
+		canonical[2+len(parsed.runtime)] ^= 1
 	case "flip_last_signature_byte":
 		canonical[len(canonical)-1] ^= 1
 	case "set_version_2":
-		signing[0], canonical[0] = 2, 2
+		canonical[0] = 2
 	case "set_decision_0":
-		signing[134], canonical[134] = 0, 0
+		canonical[parsed.decisionOffset] = 0
 	case "append_zero_byte":
 		canonical = append(canonical, 0)
+	case "truncate_last_byte":
+		canonical = canonical[:len(canonical)-1]
+	case "set_metadata_length_zero":
+		binary.BigEndian.PutUint16(canonical[parsed.metadataLengthOffset:], 0)
+	case "set_signature_length_63":
+		binary.BigEndian.PutUint32(canonical[len(parsed.signing):], 63)
 	default:
 		fail("%s: unknown mutation %s", test.ID, test.Mutation)
 	}
-	actualError := ""
-	if canonical[0] != 1 {
-		actualError = "UNSUPPORTED_VERSION"
-	} else if canonical[134] < 1 || canonical[134] > 4 {
-		actualError = "UNKNOWN_DECISION"
-	} else {
-		sigLen := int(canonical[len(signing)])<<24 | int(canonical[len(signing)+1])<<16 |
-			int(canonical[len(signing)+2])<<8 | int(canonical[len(signing)+3])
-		if len(canonical) != len(signing)+4+sigLen {
-			actualError = "TRAILING_BYTES"
+	decoded, actualError := parseEnvelope(canonical)
+	if actualError == "" {
+		publicKey, keyErr := hex.DecodeString(source.Ed25519PublicKeyHex)
+		if keyErr != nil || len(publicKey) != ed25519.PublicKeySize {
+			fail("%s: invalid public key", test.ID)
+		}
+		if ed25519.Verify(ed25519.PublicKey(publicKey), decoded.signing, decoded.signature) {
+			actualError = "VALID"
 		} else {
-			publicKey, _ := hex.DecodeString(source.Ed25519PublicKeyHex)
-			if ed25519.Verify(ed25519.PublicKey(publicKey), signing, canonical[len(canonical)-64:]) {
-				actualError = "VALID"
-			} else {
-				actualError = "INVALID_SIGNATURE"
-			}
+			actualError = "INVALID_SIGNATURE"
 		}
 	}
 	if actualError != test.ExpectedError {
@@ -99,6 +200,9 @@ func fail(format string, args ...any) {
 }
 
 func verifyVector(v vector) {
+	if v.Kind != "ed25519" {
+		fail("%s: unsupported signature kind", v.ID)
+	}
 	signing, err := hex.DecodeString(v.SigningBytesHex)
 	if err != nil {
 		fail("%s: invalid signing hex: %v", v.ID, err)
@@ -108,7 +212,12 @@ func verifyVector(v vector) {
 		fail("%s: invalid canonical hex: %v", v.ID, err)
 	}
 	keyHash := sha256.Sum256([]byte(v.SignerKeyID))
+	bindingHash, err := hex.DecodeString(v.BindingHashHex)
+	if err != nil || len(bindingHash) != 32 {
+		fail("%s: invalid binding hash", v.ID)
+	}
 	metadata := append([]byte{byte(v.SignatureAlgorithmCode)}, keyHash[:]...)
+	metadata = append(metadata, bindingHash...)
 	reconstructed := []byte{byte(v.ProofEnvelopeVersion), byte(v.EncodingVersion)}
 	for _, value := range []string{
 		v.RuntimeVersionPackedU32Hex, v.PolicyHashHex, v.BytecodeHashHex,
@@ -132,69 +241,34 @@ func verifyVector(v vector) {
 	if len(canonical) != v.CanonicalBytesLen {
 		fail("%s: canonical len mismatch", v.ID)
 	}
-	if len(signing) < 138 {
-		fail("%s: signing bytes too short", v.ID)
+	parsed, parseErr := parseEnvelope(canonical)
+	if parseErr != "" {
+		fail("%s: %s", v.ID, parseErr)
 	}
-	if len(canonical) < len(signing)+4 {
-		fail("%s: canonical too short", v.ID)
+	if !bytes.Equal(parsed.signing, signing) || hex.EncodeToString(parsed.runtime) != v.RuntimeVersionPackedU32Hex ||
+		int(parsed.version) != v.ProofEnvelopeVersion || int(parsed.encoding) != v.EncodingVersion ||
+		int(parsed.decision) != v.DecisionCode || !bytes.Equal(parsed.metadata, metadata) {
+		fail("%s: parsed field mismatch", v.ID)
 	}
-	for i := range signing {
-		if canonical[i] != signing[i] {
-			fail("%s: canonical prefix mismatch", v.ID)
+	for i, expected := range []string{v.PolicyHashHex, v.BytecodeHashHex, v.InputHashHex, v.StateHashHex} {
+		if hex.EncodeToString(parsed.hashes[i]) != expected {
+			fail("%s: hash mismatch", v.ID)
 		}
-	}
-
-	sigLen := int(canonical[len(signing)])<<24 |
-		int(canonical[len(signing)+1])<<16 |
-		int(canonical[len(signing)+2])<<8 |
-		int(canonical[len(signing)+3])
-	if len(canonical[len(signing)+4:]) != sigLen {
-		fail("%s: signature len suffix mismatch", v.ID)
-	}
-
-	if hex.EncodeToString(signing[2:6]) != v.RuntimeVersionPackedU32Hex {
-		fail("%s: runtime pack mismatch", v.ID)
-	}
-	if int(signing[134]) != v.DecisionCode {
-		fail("%s: decision code mismatch", v.ID)
-	}
-	if signing[0] != 1 || int(signing[0]) != v.ProofEnvelopeVersion {
-		fail("%s: envelope version mismatch", v.ID)
-	}
-	if signing[1] != 1 || int(signing[1]) != v.EncodingVersion {
-		fail("%s: encoding version mismatch", v.ID)
-	}
-	if v.DecisionCode < 1 || v.DecisionCode > 4 {
-		fail("%s: unknown decision code", v.ID)
-	}
-	metaLen := int(signing[135])<<8 | int(signing[136])
-	meta := signing[137:]
-	if len(meta) != metaLen || len(meta) == 0 {
-		fail("%s: signature metadata length mismatch", v.ID)
-	}
-	if int(meta[0]) != v.SignatureAlgorithmCode {
-		fail("%s: algorithm code mismatch", v.ID)
 	}
 	if v.Kind == "ed25519" {
-		if metaLen != 33 || sigLen != 64 {
-			fail("%s: invalid Ed25519 lengths", v.ID)
-		}
-		if hex.EncodeToString(meta[1:]) != hex.EncodeToString(keyHash[:]) {
-			fail("%s: signer key id hash mismatch", v.ID)
-		}
-		if hex.EncodeToString(canonical[len(signing)+4:]) != v.SignatureBytesHex {
+		if hex.EncodeToString(parsed.signature) != v.SignatureBytesHex {
 			fail("%s: signature bytes mismatch", v.ID)
 		}
 		publicKey, err := hex.DecodeString(v.Ed25519PublicKeyHex)
 		if err != nil || len(publicKey) != ed25519.PublicKeySize {
 			fail("%s: invalid Ed25519 public key", v.ID)
 		}
-		if !ed25519.Verify(ed25519.PublicKey(publicKey), signing, canonical[len(signing)+4:]) {
+		if !ed25519.Verify(ed25519.PublicKey(publicKey), parsed.signing, parsed.signature) {
 			fail("%s: Ed25519 signature verification failed", v.ID)
 		}
 		tampered := append([]byte(nil), signing...)
-		tampered[6] ^= 1
-		if ed25519.Verify(ed25519.PublicKey(publicKey), tampered, canonical[len(signing)+4:]) {
+		tampered[2+len(parsed.runtime)] ^= 1
+		if ed25519.Verify(ed25519.PublicKey(publicKey), tampered, parsed.signature) {
 			fail("%s: tampered payload signature accepted", v.ID)
 		}
 	}

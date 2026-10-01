@@ -17,6 +17,8 @@ git diff --exit-code -- docs/PROOF_ENVELOPE_V1_TEST_VECTORS.json
 
 - hex decode roundtrip for `signing_bytes` and `canonical_bytes`
 - declared lengths match actual lengths
+- encoding 2 Ed25519 metadata contains the signer hash and the signed
+  `ProofBinding` hash; legacy encoding 1 is rejected for context-bound proofs
 - `canonical_bytes = signing_bytes || signature_len:u32 || signature_bytes`
 - packed `runtime_version` bytes match fixture metadata
 - `decision_code` byte matches fixture metadata

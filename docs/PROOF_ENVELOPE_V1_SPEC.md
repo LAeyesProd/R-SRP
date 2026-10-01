@@ -67,6 +67,7 @@ Metadata:
 
 - `algorithm_code = 1`
 - `key_id_hash: [u8; 32]` = `SHA-256(signer_key_id UTF-8 bytes)`
+- `binding_hash: [u8; 32]` = `SHA-256(ProofBinding::canonical_bytes())`
 
 Signature bytes:
 
@@ -132,7 +133,7 @@ Where:
 
 Verifier must:
 
-1. Validate `version == 1` and `encoding_version == 1`
+1. Validate `version == 1` and `encoding_version == 2`
 2. Validate `decision_code` is known
 3. Validate signature variant metadata (algorithm code, key/level compatibility)
 4. Recompute `signing_bytes`
@@ -149,6 +150,11 @@ primitive check and MUST NOT be treated as complete envelope verification.
 - new attestation APIs should prefer `ProofEnvelopeV1`
 - future incompatible changes MUST increment `version`
 - encoding-only changes MUST increment `encoding_version`
+- Ed25519 encoding 2 signs a SHA-256 hash of the complete canonical `ProofBinding`
+  (including `serialization_version`, `schema_id`, and `crypto_backend_id`) in
+  its metadata after the signer key hash. Encoding 1 did not carry this context;
+  it is rejected rather than accepted as a context-bound proof. The hybrid
+  signature metadata layout is unchanged when `pq-proof` is enabled.
 
 ## 10. Current Implementation Coverage (Workspace)
 
@@ -184,14 +190,5 @@ Machine-readable fixture export:
 
 - `docs/PROOF_ENVELOPE_V1_TEST_VECTORS.json`
 
-Canonical `signing_bytes` hex:
-
-```text
-010100090001111111111111111111111111111111111111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222223333333333333333333333333333333333333333333333333333333333333333444444444444444444444444444444444444444444444444444444444444444402002101e7e331964026891ae93f6f0d4b20c19f95cf20d6c6ba87fd73e287b081a46201
-```
-
-Canonical `canonical_bytes` hex (includes signature length + signature bytes):
-
-```text
-010100090001111111111111111111111111111111111111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222223333333333333333333333333333333333333333333333333333333333333333444444444444444444444444444444444444444444444444444444444444444402002101e7e331964026891ae93f6f0d4b20c19f95cf20d6c6ba87fd73e287b081a46201000000406dfc53cce34237ad8fdd62a3fc35b1221d18d7503971bdf73ec1f37d0cacfe002cc3405dfa2c046b66a68760c29c55a2fb8c130cc3d926a54645c771989dc000
-```
+The canonical signing and full-envelope hex are generated in the machine-readable
+fixture above; the production gate regenerates it and rejects any drift.
