@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.10.0 - Unreleased
+
+### Proof verification hardening
+
+- Reject unsupported `ProofEnvelopeV1` schema/encoding versions and decision codes before signature verification.
+- Add fail-closed Ed25519 verification bound to the expected `ProofBinding` and signer key ID.
+- Strengthen Python, TypeScript and Go interop checks and make all three release-gating.
+- Generate the canonical Ed25519 fixture from Rust and reject fixture drift in CI.
+- Add portable negative-vector mutations for signature, payload, version, decision and trailing-byte rejection.
+
 ## 0.9.4 - 2026-02-26
 
 ### Security

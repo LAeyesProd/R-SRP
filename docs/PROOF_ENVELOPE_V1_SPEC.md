@@ -3,6 +3,10 @@
 Status: `Draft (implementation-backed)`  
 Scope: `rsrp-proof-engine` proof attestation envelope format for deterministic verification and ledger embedding.
 
+Release note: the current workspace is the unreleased `0.10.0` development
+line. This format is not frozen until the Rust-generated fixture and all
+cross-language signature checks agree.
+
 ## 1. Purpose
 
 `ProofEnvelopeV1` defines a stable, canonical proof attestation payload with:
@@ -38,6 +42,8 @@ struct ProofEnvelopeV1 {
 - `encoding_version`: canonical binary encoding revision (`1`)
 - `runtime_version`: packed runtime semver `(major << 24) | (minor << 16) | patch`
   - example: `0.9.1` -> `0x00090001`
+  - valid ranges: major `0..=255`, minor `0..=255`, patch `0..=65535`
+  - pre-release/build suffixes are rejected by the v1 packer
 - `policy_hash`: SHA-256 of canonical serialized policy representation
   - current engine compiled path uses canonical serialized AST hash
 - `bytecode_hash`: SHA-256 of canonical serialized compiled bytecode (including action bytecode)
@@ -61,6 +67,7 @@ Metadata:
 
 - `algorithm_code = 1`
 - `key_id_hash: [u8; 32]` = `SHA-256(signer_key_id UTF-8 bytes)`
+- `binding_hash: [u8; 32]` = `SHA-256(ProofBinding::canonical_bytes())`
 
 Signature bytes:
 
@@ -126,12 +133,15 @@ Where:
 
 Verifier must:
 
-1. Validate `version == 1` and `encoding_version == 1`
+1. Validate `version == 1` and `encoding_version == 2`
 2. Validate `decision_code` is known
 3. Validate signature variant metadata (algorithm code, key/level compatibility)
 4. Recompute `signing_bytes`
 5. Verify signature over `signing_bytes`
 6. Recompute and compare hashes (`policy_hash`, `bytecode_hash`, `input_hash`, `state_hash`) against claimed execution context
+
+Signature verification without steps 1-3 and 6 is only a cryptographic
+primitive check and MUST NOT be treated as complete envelope verification.
 
 ## 9. Compatibility / Migration Rules
 
@@ -140,6 +150,11 @@ Verifier must:
 - new attestation APIs should prefer `ProofEnvelopeV1`
 - future incompatible changes MUST increment `version`
 - encoding-only changes MUST increment `encoding_version`
+- Ed25519 encoding 2 signs a SHA-256 hash of the complete canonical `ProofBinding`
+  (including `serialization_version`, `schema_id`, and `crypto_backend_id`) in
+  its metadata after the signer key hash. Encoding 1 did not carry this context;
+  it is rejected rather than accepted as a context-bound proof. The hybrid
+  signature metadata layout is unchanged when `pq-proof` is enabled.
 
 ## 10. Current Implementation Coverage (Workspace)
 
@@ -175,14 +190,5 @@ Machine-readable fixture export:
 
 - `docs/PROOF_ENVELOPE_V1_TEST_VECTORS.json`
 
-Canonical `signing_bytes` hex:
-
-```text
-010100090001111111111111111111111111111111111111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222223333333333333333333333333333333333333333333333333333333333333333444444444444444444444444444444444444444444444444444444444444444402002101e7e331964026891ae93f6f0d4b20c19f95cf20d6c6ba87fd73e287b081a46201
-```
-
-Canonical `canonical_bytes` hex (includes signature length + signature bytes):
-
-```text
-010100090001111111111111111111111111111111111111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222223333333333333333333333333333333333333333333333333333333333333333444444444444444444444444444444444444444444444444444444444444444402002101e7e331964026891ae93f6f0d4b20c19f95cf20d6c6ba87fd73e287b081a4620100000040e22e8f4b3ab834f4db936d865b8ded519e0aac395ca625c154840f37f7f571429e91b91f97652e4d84495d903bce814fde0d84bd6606ce854648bc064d25f106
-```
+The canonical signing and full-envelope hex are generated in the machine-readable
+fixture above; the production gate regenerates it and rejects any drift.

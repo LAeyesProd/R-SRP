@@ -13,8 +13,11 @@ The goal is to validate:
 - length-prefix semantics,
 - packed runtime version bytes,
 - deterministic SHA-256 over `canonical_bytes`.
+- independent semantic reconstruction and Ed25519 signature verification.
+- portable rejection cases for tampered payloads/signatures and invalid framing.
 
-It is not a full cryptographic interoperability suite yet (signature verification key export is not part of the current vector JSON).
+Ed25519 verification is covered. Hybrid Ed25519 + ML-DSA interoperability is
+not yet part of the vector corpus.
 
 ## Fixtures
 
@@ -28,8 +31,5 @@ It is not a full cryptographic interoperability suite yet (signature verificatio
 
 ## Next Step (Recommended)
 
-For cross-language signature verification vectors, extend the JSON schema with:
-
-- `ed25519_public_key_hex`
-- `signature_bytes_hex` (or structured extraction for `ProofEnvelopeV1`)
-- optional KMS/cert identity metadata for future `v1.1/v2`
+Add hybrid Ed25519 + ML-DSA vectors and optional KMS/certificate identity
+metadata for a future `v1.1/v2` identity profile.
