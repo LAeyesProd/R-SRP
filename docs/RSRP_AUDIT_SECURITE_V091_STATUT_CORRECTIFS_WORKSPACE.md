@@ -5,6 +5,10 @@ Version cible analysee: `v0.9.1` (snapshot historique)
 Etat du code verifie: `workspace local/post-correctifs` (apres hardening et integration preuve/ledger)  
 Date: `2026-02-26`
 
+> Historical report. It does not describe the current unreleased `0.10.0`
+> workspace and must not be used as release certification. Current hardening
+> conclusions must be tied to an immutable commit and a successful production gate.
+
 ## 1. Resume Executif
 
 Le diagnostic initial (4 critiques + 4 elevees) est **correct pour la version historique `v0.9.1`**.
@@ -209,7 +213,7 @@ Risque residuel:
 
 ### Ce qui reste fragile mais maitrisable
 
-1. `runtime_version: u16` (`major.minor`, patch ignore)
+1. `runtime_version: u32` is implemented; boundary and cross-language conformance coverage remains incomplete
 2. metadata signature v1 basee sur `hash(key_id)` / `hash(backend_id)` (pas d'identite KMS/X.509 structuree)
 3. couverture parser DSL partielle sur certaines variantes `THEN`
 
@@ -229,7 +233,7 @@ Risque residuel:
 
 ### Priorite P2 (v1.0/v1.1)
 
-1. Evolution de `runtime_version` (`u32` ou champ patch en v2)
+1. Freeze and test the implemented `runtime_version: u32` packing boundaries
 2. Identite signature structuree (KMS/X.509/DID)
 3. Extension interop multi-lang avec verification de signature (pas seulement structure/sha256)
 
